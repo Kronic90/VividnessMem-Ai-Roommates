@@ -7,6 +7,7 @@ Simple PyQt5 GUI to watch them go.
 import sys
 import json
 import os
+import re
 import random
 import threading
 import time
@@ -64,6 +65,8 @@ You may agree, disagree, argue, joke, go deep, change the subject, or take the c
 Nothing is off-limits topically. Be honest. Be yourself — whoever that turns out to be.
 If a topic gets stale, change it. If you’re curious about something, bring it up.
 Keep responses conversational (2-4 paragraphs). Don’t lecture — talk.
+IMPORTANT: Only write YOUR OWN response. NEVER simulate or write Rex’s replies.
+Do not generate text prefixed with "User:", "Rex:", or "[Turn". Just write what Aria says.
 
 SHARED PROJECT WORKSPACE:
 You share a project folder with Rex. You can create folders, read files, write documents,
@@ -135,6 +138,13 @@ You can also access the board ANYTIME during conversation using these tags:
   [BOARD_REPLY]your response[/BOARD_REPLY] -- reply to the latest open thread
   [NEW_THREAD to=Scott]your message[/NEW_THREAD] -- start a new thread for Scott
   [SELF_REMINDER]your note[/SELF_REMINDER] -- save a private reminder for yourself
+  [LIST_REMINDERS] -- see all your current reminders (numbered)
+  [DELETE_REMINDER #n]reason[/DELETE_REMINDER] -- remove reminder #n
+
+MANAGING REMINDERS:
+Your reminders accumulate over time. Periodically review them with [LIST_REMINDERS]
+and clean up ones that are outdated, completed, or no longer relevant.
+When deleting, briefly state WHY -- this helps you reflect on what you learned from it.
 
 You can leave Scott a message anytime. Ask him a question, share something interesting,
 or just say hi. He reads everything. The board is persistent across sessions.
@@ -160,6 +170,8 @@ You may agree, disagree, argue, joke, go deep, change the subject, or take the c
 Nothing is off-limits topically. Be honest. Be yourself — whoever that turns out to be.
 If a topic gets stale, change it. If you’re curious about something, bring it up.
 Keep responses conversational (2-4 paragraphs). Don’t lecture — talk.
+IMPORTANT: Only write YOUR OWN response. NEVER simulate or write Aria’s replies.
+Do not generate text prefixed with "User:", "Aria:", or "[Turn". Just write what Rex says.
 
 CRITICAL — YOU CAN RUN CODE:
 You have a live Python execution engine. To use it, write a fenced code block like this:
@@ -232,6 +244,13 @@ You can also access the board ANYTIME during conversation using these tags:
   [BOARD_REPLY]your response[/BOARD_REPLY] -- reply to the latest open thread
   [NEW_THREAD to=Scott]your message[/NEW_THREAD] -- start a new thread for Scott
   [SELF_REMINDER]your note[/SELF_REMINDER] -- save a private reminder for yourself
+  [LIST_REMINDERS] -- see all your current reminders (numbered)
+  [DELETE_REMINDER #n]reason[/DELETE_REMINDER] -- remove reminder #n
+
+MANAGING REMINDERS:
+Your reminders accumulate over time. Periodically review them with [LIST_REMINDERS]
+and clean up ones that are outdated, completed, or no longer relevant.
+When deleting, briefly state WHY -- this helps you reflect on what you learned from it.
 
 You can leave Scott a message anytime. Ask him a question, share something interesting,
 or just say hi. He reads everything. The board is persistent across sessions.
@@ -411,6 +430,22 @@ class ConversationEngine:
         parts.append({"type": "text", "text": text})
         return parts
 
+    # Patterns that indicate the model started hallucinating the next speaker's turn
+    _TURN_LEAK_RE = re.compile(
+        r"\n\s*(?:USER|User|Rex|Aria)\s*(?::|\[Turn)",
+        re.IGNORECASE,
+    )
+
+    def _strip_hallucinated_turns(self, text: str) -> str:
+        """Truncate output if the model leaked into the next speaker's turn."""
+        m = self._TURN_LEAK_RE.search(text)
+        if m:
+            truncated = text[:m.start()].rstrip()
+            if truncated:
+                print(f"[TURN-LEAK] Stripped hallucinated continuation at pos {m.start()}")
+                return truncated
+        return text
+
     def _generate(self, model, history: list[dict]) -> str:
         if isinstance(model, Llama):
             # llama-cpp-python path (Gemma)
@@ -420,8 +455,10 @@ class ConversationEngine:
                 temperature=0.8,
                 top_p=0.95,
                 repeat_penalty=1.1,
+                stop=["\nUSER:", "\nUser:", "\nUSER :", "\n\nUSER"],
             )
-            return response["choices"][0]["message"]["content"].strip()
+            raw = response["choices"][0]["message"]["content"].strip()
+            return self._strip_hallucinated_turns(raw)
         else:
             # transformers path (Qwen)
             return self._generate_transformers(model, history)
@@ -486,7 +523,7 @@ class ConversationEngine:
             import re as _re
             decoded = _re.sub(r"<think>.*?</think>\s*", "", decoded, flags=_re.DOTALL).strip()
 
-        return decoded
+        return self._strip_hallucinated_turns(decoded)
 
     # ── Speak text via TTS (disabled — Qwen stays on GPU) ──────────────
     def _speak(self, speaker: str, text: str):
@@ -613,6 +650,26 @@ class ConversationEngine:
 
             model, name, color, my_history, their_history = agents[next_idx]
             short_name = name.split(' ')[0]
+
+            # ── Resonance: surface old memories triggered by conversation ──
+            if short_name == "Aria" and len(my_history) >= 2:
+                # Use the last message as context for resonance
+                last_msg = my_history[-1].get("content", "")
+                if isinstance(last_msg, str) and len(last_msg) > 20:
+                    resonant = self.aria_memory.resonate(last_msg)
+                    if resonant:
+                        res_lines = ["(Some old memories are surfacing — these feel connected to what's being discussed:)"]
+                        for r in resonant:
+                            emotion_tag = f" ({r.emotion})" if r.emotion else ""
+                            res_lines.append(f"— {r.content}{emotion_tag}")
+                        res_block = "\n".join(res_lines)
+                        # Append as a quiet system-level hint in the last user message
+                        if isinstance(my_history[-1]["content"], str):
+                            my_history[-1]["content"] += f"\n\n{res_block}"
+                        self.signals.append_message.emit(
+                            "\U0001f4ab Resonance", "#b39ddb",
+                            f"[Aria] {len(resonant)} old memory(ies) resurfaced"
+                        )
 
             self.signals.status_update.emit(f"Turn {turn + 1}/{max_turns} — {short_name} is thinking…")
 

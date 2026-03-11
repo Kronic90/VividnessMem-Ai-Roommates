@@ -21,9 +21,22 @@ Storage: JSON files under ai_dialogue_data/aria/
 
 import json
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+
+# Words too common to trigger resonance
+_RESONANCE_STOP = {
+    "the", "and", "for", "that", "this", "with", "from", "was",
+    "are", "not", "but", "you", "your", "have", "has", "had",
+    "been", "will", "would", "could", "should", "can", "did",
+    "does", "just", "about", "they", "them", "what", "when",
+    "turn", "session", "conversation", "here", "there", "also",
+    "like", "know", "think", "said", "really", "going", "right",
+    "something", "things", "thing", "well", "yeah", "okay",
+    "aria", "rex",  # don't resonate on names alone
+}
 
 # ─── Storage paths ─────────────────────────────────────────────────────────
 DATA_DIR = Path(__file__).parent / "ai_dialogue_data" / "aria"
@@ -117,6 +130,7 @@ class AriaMemory:
     # How many reflections to inject into context
     ACTIVE_SELF_LIMIT = 8
     ACTIVE_SOCIAL_LIMIT = 5  # per entity
+    RESONANCE_LIMIT = 3  # max old memories that can resurface per turn
 
     def __init__(self):
         _ensure_dirs()
@@ -161,12 +175,72 @@ class AriaMemory:
             r.touch()
         return active
 
+    # ─── Resonance (old memories resurfacing) ─────────────────────────
+
+    def resonate(self, context: str, limit: int | None = None) -> list[Reflection]:
+        """Find old faded memories that resonate with current conversation.
+
+        Searches ALL memories (including ones below the active threshold)
+        for keyword overlap with the conversation context. Matching memories
+        get a .touch() boost, potentially pulling them back into the active
+        set over time — like suddenly remembering something from months ago
+        because the conversation triggered it.
+
+        Returns only memories that are NOT already in the active set.
+        """
+        n = limit or self.RESONANCE_LIMIT
+        if not context or not self.self_reflections:
+            return []
+
+        # Extract meaningful words from conversation context
+        context_words = {
+            w for w in re.findall(r"\b[a-zA-Z]{4,}\b", context.lower())
+        } - _RESONANCE_STOP
+        if not context_words:
+            return []
+
+        # Get current active set IDs so we don't duplicate
+        active_set = set(
+            id(r) for r in sorted(
+                self.self_reflections, key=lambda r: r.vividness, reverse=True
+            )[:self.ACTIVE_SELF_LIMIT]
+        )
+
+        # Score all non-active memories by keyword overlap
+        # Use prefix matching (first 5 chars) to handle plurals/conjugations
+        context_prefixes = {w[:5] for w in context_words if len(w) >= 5}
+        scored: list[tuple[float, Reflection]] = []
+        for ref in self.self_reflections:
+            if id(ref) in active_set:
+                continue  # already surfaced normally
+            mem_text = f"{ref.content} {ref.emotion}".lower()
+            mem_words = set(re.findall(r"\b[a-zA-Z]{4,}\b", mem_text))
+            mem_prefixes = {w[:5] for w in mem_words if len(w) >= 5}
+            # Count matches: exact words + prefix matches for longer words
+            exact_overlap = len(context_words & mem_words)
+            prefix_overlap = len(context_prefixes & mem_prefixes)
+            total_overlap = max(exact_overlap, prefix_overlap)
+            if total_overlap >= 2:  # need at least 2 word matches
+                # Score: overlap count + importance bonus
+                score = total_overlap + (ref.importance * 0.2)
+                scored.append((score, ref))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        resonant = [ref for _, ref in scored[:n]]
+
+        # Touch resonant memories — they're being remembered
+        for r in resonant:
+            r.touch()
+
+        return resonant
+
     # ─── Context Block (injected into system prompt) ──────────────────
 
-    def get_context_block(self, current_entity: str = "") -> str:
+    def get_context_block(self, current_entity: str = "", resonant: list[Reflection] | None = None) -> str:
         """
         Returns a narrative block to inject into Aria's system prompt.
         Written in first person, like reading from a journal.
+        Optionally includes resonant memories (old ones triggered by context).
         """
         lines = []
 
@@ -186,6 +260,13 @@ class AriaMemory:
                     emotion_tag = f" ({r.emotion})" if r.emotion else ""
                     lines.append(f"— {r.content}{emotion_tag}")
                 lines.append("")
+
+        if resonant:
+            lines.append("=== SOMETHING THIS REMINDS ME OF (old memories resurfacing) ===")
+            for r in resonant:
+                emotion_tag = f" ({r.emotion})" if r.emotion else ""
+                lines.append(f"— {r.content}{emotion_tag}")
+            lines.append("")
 
         return "\n".join(lines) if lines else ""
 

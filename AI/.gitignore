@@ -21,3 +21,7 @@
 !test_memory_longscale.py
 !test_organic_memory_results.txt
 !test_memory_longscale_results.txt
+!test_resonance.py
+!test_resonance_results.txt
+!test_task_learning.py
+!test_task_learning_results.txt
