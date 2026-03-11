@@ -34,6 +34,7 @@ import memory_rex
 memory_aria.DATA_DIR = Path(os.path.join(_TEMP_DIR, "aria"))
 memory_aria.SELF_FILE = memory_aria.DATA_DIR / "self_memory.json"
 memory_aria.SOCIAL_DIR = memory_aria.DATA_DIR / "social"
+memory_aria.BRIEF_FILE = memory_aria.DATA_DIR / "brief.json"
 
 memory_rex.DATA_DIR = Path(os.path.join(_TEMP_DIR, "rex"))
 memory_rex.SELF_FILE = memory_rex.DATA_DIR / "self_memory.json"

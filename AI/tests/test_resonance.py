@@ -26,6 +26,7 @@ import memory_aria
 memory_aria.DATA_DIR = Path(_tmp) / "aria"
 memory_aria.SELF_FILE = memory_aria.DATA_DIR / "self_memory.json"
 memory_aria.SOCIAL_DIR = memory_aria.DATA_DIR / "social"
+memory_aria.BRIEF_FILE = memory_aria.DATA_DIR / "brief.json"
 
 from memory_aria import AriaMemory, Reflection
 

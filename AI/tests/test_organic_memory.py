@@ -36,6 +36,7 @@ from pathlib import Path
 memory_aria.DATA_DIR = Path(_ARIA_DIR)
 memory_aria.SELF_FILE = Path(_ARIA_DIR) / "self_memory.json"
 memory_aria.SOCIAL_DIR = Path(_ARIA_DIR) / "social"
+memory_aria.BRIEF_FILE = Path(_ARIA_DIR) / "brief.json"
 
 memory_rex.DATA_DIR = Path(_REX_DIR)
 memory_rex.SELF_FILE = Path(_REX_DIR) / "self_memory.json"

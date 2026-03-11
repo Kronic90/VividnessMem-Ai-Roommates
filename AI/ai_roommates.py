@@ -35,6 +35,7 @@ from memory_aria import (
     AriaMemory, Reflection,
     CURATION_PROMPT as ARIA_CURATION_PROMPT,
     parse_curation_response as aria_parse,
+    parse_brief_response, parse_rescore_response,
 )
 from message_board import (
     get_unanswered_threads, format_thread_for_ai, parse_ai_response,
@@ -870,6 +871,11 @@ class ConversationEngine:
         self._curate_memories()
 
         # ══════════════════════════════════════════════════════════════
+        #  PHASE 3.5: Periodic memory maintenance (brief + rescore)
+        # ══════════════════════════════════════════════════════════════
+        self._maintain_aria_memory()
+
+        # ══════════════════════════════════════════════════════════════
         #  PHASE 4: Post-session notebooks (or go to sleep)
         # ══════════════════════════════════════════════════════════════
         self.signals.append_message.emit("📨 System", "#66bb6a", "─── Post-session: message board time ───")
@@ -983,6 +989,54 @@ class ConversationEngine:
             "speaker": speaker,
             "text": text,
         })
+
+    # ── Periodic memory maintenance (brief + rescore) ────────────────
+    def _maintain_aria_memory(self):
+        """Bump session counter; regenerate brief and/or rescore if due."""
+        session_num = self.aria_memory.bump_session()
+        do_brief = self.aria_memory.needs_brief()
+        do_rescore = self.aria_memory.needs_rescore()
+
+        if not do_brief and not do_rescore:
+            return
+
+        try:
+            if do_brief:
+                self.signals.status_update.emit(
+                    f"Session {session_num}: Aria is compressing her understanding\u2026")
+                prompt = self.aria_memory.prepare_brief_prompt(entity="Rex")
+                history = [
+                    {"role": "system", "content": GEMMA_SYSTEM},
+                    {"role": "user", "content": prompt},
+                ]
+                response = self._generate(self.gemma, history)
+                parsed = parse_brief_response(response)
+                if parsed:
+                    self.aria_memory.apply_brief(parsed, entity="Rex")
+                    self.signals.status_update.emit(
+                        "Aria updated her compressed understanding.")
+
+            if do_rescore:
+                self.signals.status_update.emit(
+                    f"Session {session_num}: Aria is re-evaluating memory importance\u2026")
+                prompt, indexed = self.aria_memory.prepare_rescore_prompt()
+                if prompt:
+                    history = [
+                        {"role": "system", "content": GEMMA_SYSTEM},
+                        {"role": "user", "content": prompt},
+                    ]
+                    response = self._generate(self.gemma, history)
+                    adjustments = parse_rescore_response(response)
+                    if adjustments:
+                        self.aria_memory.apply_rescores(adjustments, indexed)
+                        self.signals.status_update.emit(
+                            f"Aria re-scored {len(adjustments)} memories.")
+
+            self.aria_memory._save_brief()
+            self.aria_memory.save()
+        except Exception as e:
+            self.signals.status_update.emit(f"Memory maintenance failed: {e}")
+            import traceback; traceback.print_exc()
 
     # ── End-of-conversation memory curation ─────────────────────────
     def _curate_memories(self):

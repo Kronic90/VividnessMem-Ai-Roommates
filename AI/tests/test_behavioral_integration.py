@@ -85,6 +85,7 @@ def session_memory(tmp_dir):
     memory_aria.DATA_DIR = aria_dir
     memory_aria.SELF_FILE = aria_dir / "self_memory.json"
     memory_aria.SOCIAL_DIR = social_dir
+    memory_aria.BRIEF_FILE = aria_dir / "brief.json"
 
     return AriaMemory()
 

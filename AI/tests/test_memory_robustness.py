@@ -61,9 +61,13 @@ def fresh_memory(tmp_dir: str) -> AriaMemory:
     memory_aria.DATA_DIR = aria_dir
     memory_aria.SELF_FILE = aria_dir / "self_memory.json"
     memory_aria.SOCIAL_DIR = social_dir
+    memory_aria.BRIEF_FILE = aria_dir / "brief.json"
     mem = AriaMemory.__new__(AriaMemory)
     mem.self_reflections = []
     mem.social_impressions = {}
+    mem._brief_data = {"session_count": 0, "last_brief_session": 0,
+                       "last_rescore_session": 0, "self_brief": "",
+                       "entity_briefs": {}}
     return mem
 
 
@@ -181,6 +185,7 @@ def test_corruption_recovery():
     memory_aria.DATA_DIR = aria_dir
     memory_aria.SELF_FILE = self_file
     memory_aria.SOCIAL_DIR = social_dir
+    memory_aria.BRIEF_FILE = aria_dir / "brief.json"
 
     self_file.write_text("", encoding="utf-8")
     try:
@@ -256,11 +261,15 @@ def test_save_load_integrity():
     memory_aria.DATA_DIR = aria_dir
     memory_aria.SELF_FILE = aria_dir / "self_memory.json"
     memory_aria.SOCIAL_DIR = social_dir
+    memory_aria.BRIEF_FILE = aria_dir / "brief.json"
 
     # Create memories with specific values
     mem = AriaMemory.__new__(AriaMemory)
     mem.self_reflections = []
     mem.social_impressions = {}
+    mem._brief_data = {"session_count": 0, "last_brief_session": 0,
+                       "last_rescore_session": 0, "self_brief": "",
+                       "entity_briefs": {}}
 
     originals = [
         make_ref("First memory with unicode: cafe\u0301 \u2014 and emojis \U0001f9e0",

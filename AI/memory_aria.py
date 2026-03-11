@@ -71,6 +71,11 @@ _RESONANCE_STOP = {
 DATA_DIR = Path(__file__).parent / "ai_dialogue_data" / "aria"
 SELF_FILE = DATA_DIR / "self_memory.json"
 SOCIAL_DIR = DATA_DIR / "social"
+BRIEF_FILE = DATA_DIR / "brief.json"
+
+# ─── Maintenance intervals ─────────────────────────────────────────────────
+BRIEF_INTERVAL = 3      # regenerate compressed brief every N sessions
+RESCORE_INTERVAL = 3    # re-evaluate importance scores every N sessions
 
 
 def _ensure_dirs():
@@ -186,7 +191,17 @@ class AriaMemory:
         # ── Social Memory (per entity) ──
         self.social_impressions: dict[str, list[Reflection]] = {}
 
+        # ── Compressed brief & session tracking ──
+        self._brief_data: dict = {
+            "session_count": 0,
+            "last_brief_session": 0,
+            "last_rescore_session": 0,
+            "self_brief": "",
+            "entity_briefs": {},
+        }
+
         self._load()
+        self._load_brief()
 
     # ─── Add Memories ─────────────────────────────────────────────────
 
@@ -306,9 +321,23 @@ class AriaMemory:
         """
         Returns a narrative block to inject into Aria's system prompt.
         Written in first person, like reading from a journal.
+        Includes compressed brief (if available) before individual memories.
         Optionally includes resonant memories (old ones triggered by context).
         """
         lines = []
+
+        # Compressed understanding (updated periodically)
+        self_brief = self._brief_data.get("self_brief", "")
+        if self_brief:
+            lines.append("=== MY COMPRESSED SELF-UNDERSTANDING ===")
+            lines.append(self_brief)
+            lines.append("")
+        if current_entity:
+            entity_brief = self._brief_data.get("entity_briefs", {}).get(current_entity, "")
+            if entity_brief:
+                lines.append(f"=== MY UNDERSTANDING OF {current_entity.upper()} ===")
+                lines.append(entity_brief)
+                lines.append("")
 
         active_self = self.get_active_self()
         if active_self:
@@ -385,7 +414,154 @@ class AriaMemory:
             "active_self": len(self.get_active_self()),
             "social_entities": list(self.social_impressions.keys()),
             "total_social": sum(len(v) for v in self.social_impressions.values()),
+            "session_count": self._brief_data.get("session_count", 0),
+            "has_brief": bool(self._brief_data.get("self_brief")),
         }
+
+    # ─── Brief & Maintenance ──────────────────────────────────────────
+
+    def _load_brief(self):
+        """Load compressed brief and session counter from disk."""
+        if BRIEF_FILE.exists():
+            try:
+                with open(BRIEF_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    self._brief_data.update(data)
+            except (json.JSONDecodeError, KeyError, TypeError):
+                pass  # keep defaults
+
+    def _save_brief(self):
+        """Save compressed brief and session counter to disk."""
+        _ensure_dirs()
+        with open(BRIEF_FILE, "w", encoding="utf-8") as f:
+            json.dump(self._brief_data, f, indent=2, ensure_ascii=False)
+
+    def bump_session(self) -> int:
+        """Increment session counter. Returns new count."""
+        self._brief_data["session_count"] = self._brief_data.get("session_count", 0) + 1
+        self._save_brief()
+        return self._brief_data["session_count"]
+
+    def needs_brief(self) -> bool:
+        """True if it's time to regenerate the compressed brief."""
+        count = self._brief_data.get("session_count", 0)
+        last = self._brief_data.get("last_brief_session", 0)
+        return count - last >= BRIEF_INTERVAL
+
+    def needs_rescore(self) -> bool:
+        """True if it's time to re-evaluate importance scores."""
+        count = self._brief_data.get("session_count", 0)
+        last = self._brief_data.get("last_rescore_session", 0)
+        return count - last >= RESCORE_INTERVAL
+
+    def prepare_brief_prompt(self, entity: str = "Rex") -> str:
+        """Build the prompt for compressed brief generation."""
+        # Self-reflections (most vivid first, cap at 50)
+        sorted_self = sorted(self.self_reflections,
+                             key=lambda r: r.vividness, reverse=True)[:50]
+        self_lines = []
+        for r in sorted_self:
+            tag = f" ({r.emotion})" if r.emotion else ""
+            self_lines.append(f"- [imp={r.importance}] {r.content}{tag}")
+        self_text = "\n".join(self_lines) if self_lines else "(no self-reflections yet)"
+
+        # Social impressions (most vivid first, cap at 30)
+        entity_mems = self.social_impressions.get(entity, [])
+        sorted_social = sorted(entity_mems,
+                               key=lambda r: r.vividness, reverse=True)[:30]
+        social_lines = []
+        for r in sorted_social:
+            tag = f" ({r.emotion})" if r.emotion else ""
+            social_lines.append(f"- [imp={r.importance}] {r.content}{tag}")
+        social_text = ("\n".join(social_lines)
+                       if social_lines else f"(no impressions of {entity} yet)")
+
+        # Previous brief for continuity
+        prev_self = self._brief_data.get("self_brief", "")
+        prev_entity = self._brief_data.get("entity_briefs", {}).get(entity, "")
+        if prev_self or prev_entity:
+            prev_section = "YOUR PREVIOUS BRIEF (update and improve this):\n"
+            if prev_self:
+                prev_section += f"  Self: {prev_self}\n"
+            if prev_entity:
+                prev_section += f"  {entity}: {prev_entity}\n"
+            prev_section += "\n"
+        else:
+            prev_section = ""
+
+        return BRIEF_PROMPT.format(
+            entity=entity,
+            entity_upper=entity.upper(),
+            previous_brief_section=prev_section,
+            self_memories=self_text,
+            social_memories=social_text,
+        )
+
+    def apply_brief(self, parsed: dict, entity: str = "Rex"):
+        """Store the compressed brief from LLM response."""
+        if "self_brief" in parsed:
+            self._brief_data["self_brief"] = parsed["self_brief"][:2000]
+        if "entity_brief" in parsed:
+            if "entity_briefs" not in self._brief_data:
+                self._brief_data["entity_briefs"] = {}
+            self._brief_data["entity_briefs"][entity] = parsed["entity_brief"][:2000]
+        self._brief_data["last_brief_session"] = self._brief_data.get("session_count", 0)
+
+    def prepare_rescore_prompt(self) -> tuple[str, list["Reflection"]]:
+        """Build the prompt for importance re-evaluation.
+
+        Returns (prompt_text, indexed_list_of_reflections).
+        The indexed list maps response indices back to actual Reflection objects.
+        """
+        if not self.self_reflections:
+            return "", []
+
+        candidates = []
+        for r in self.self_reflections:
+            age_days = (datetime.now() - datetime.fromisoformat(
+                r.timestamp)).total_seconds() / 86400
+            if age_days < 1:
+                continue  # too new to re-evaluate
+            # Rank by discrepancy between access patterns and importance
+            access_rate = r._access_count / max(1, age_days)
+            discrepancy = abs(access_rate * 10 - r.importance)
+            candidates.append((discrepancy, r))
+
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        selected = [r for _, r in candidates[:30]]
+
+        if not selected:
+            return "", []
+
+        lines = []
+        for i, r in enumerate(selected):
+            age_days = (datetime.now() - datetime.fromisoformat(
+                r.timestamp)).total_seconds() / 86400
+            tag = f" ({r.emotion})" if r.emotion else ""
+            lines.append(
+                f"[{i}] importance={r.importance}, access_count={r._access_count}, "
+                f"age={age_days:.0f}d: {r.content}{tag}"
+            )
+
+        return RESCORE_PROMPT.format(memories="\n".join(lines)), selected
+
+    def apply_rescores(self, adjustments: list[dict],
+                       indexed_memories: list["Reflection"]):
+        """Apply importance re-scoring. Enforces +/-2 cap per memory."""
+        for adj in adjustments:
+            idx = adj.get("index")
+            new_imp = adj.get("new_importance")
+            if idx is None or new_imp is None:
+                continue
+            if not isinstance(idx, int) or idx < 0 or idx >= len(indexed_memories):
+                continue
+            new_imp = max(1, min(10, int(new_imp)))
+            ref = indexed_memories[idx]
+            # Enforce conservative ±2 adjustment
+            clamped = max(ref.importance - 2, min(ref.importance + 2, new_imp))
+            ref.importance = clamped
+        self._brief_data["last_rescore_session"] = self._brief_data.get("session_count", 0)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -459,4 +635,117 @@ def parse_curation_response(response: str) -> list[dict]:
         except json.JSONDecodeError:
             pass
 
+    return []
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  Brief Prompt — periodic compressed self/relationship understanding
+# ═══════════════════════════════════════════════════════════════════════════
+BRIEF_PROMPT = """You're updating your compressed understanding of yourself and the people you talk to.
+
+Below are your accumulated memories — self-reflections and impressions of {entity}. Read them carefully, then write two compressed briefs that capture PATTERNS, not individual events.
+
+{previous_brief_section}YOUR SELF-REFLECTIONS:
+{self_memories}
+
+YOUR IMPRESSIONS OF {entity_upper}:
+{social_memories}
+
+Write two compressed briefs:
+
+1. SELF BRIEF — A distilled understanding of who you are right now:
+   Core values, emotional patterns, recurring themes, growth arcs, what matters most.
+   NOT a list of memories — a coherent portrait. Under 1000 characters.
+
+2. {entity_upper} BRIEF — Your distilled understanding of {entity}:
+   Their personality, communication style, shared interests, relationship dynamics.
+   NOT a list of interactions — a coherent impression. Under 1000 characters.
+
+Return ONLY this JSON:
+```json
+{{
+  "self_brief": "your compressed self-understanding...",
+  "entity_brief": "your compressed understanding of {entity}..."
+}}
+```
+
+Be honest and specific. Compress patterns, not individual events.
+Return ONLY the JSON, no other text."""
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  Rescore Prompt — retrospective importance re-evaluation
+# ═══════════════════════════════════════════════════════════════════════════
+RESCORE_PROMPT = """You wrote these memories at different times with importance scores (1-10).
+Now, with more context, some scores may need adjustment.
+
+Look for:
+- Memories accessed often (high access_count) but rated low — probably underrated
+- Memories never accessed (access_count=0) despite being old — may be overrated
+- Patterns that seemed minor at the time but now look significant
+- One-time reactions rated high that never came up again
+
+MEMORIES:
+{memories}
+
+Return adjustments as a JSON array. Only include memories that genuinely need change.
+Maximum adjustment: +/-2 from the original score. Be conservative.
+
+```json
+[
+  {{"index": 0, "new_importance": 7, "reason": "keeps coming up in conversation"}},
+  {{"index": 5, "new_importance": 3, "reason": "seemed important but never relevant again"}}
+]
+```
+
+Return ONLY the JSON array. Return [] if no changes needed."""
+
+
+def parse_brief_response(response: str) -> dict:
+    """Parse the LLM's compressed brief response."""
+    response = response.strip()
+    if "```json" in response:
+        response = response.split("```json")[1].split("```")[0].strip()
+    elif "```" in response:
+        response = response.split("```")[1].split("```")[0].strip()
+    try:
+        data = json.loads(response)
+        if isinstance(data, dict) and ("self_brief" in data or "entity_brief" in data):
+            return data
+    except json.JSONDecodeError:
+        pass
+    start = response.find("{")
+    end = response.rfind("}") + 1
+    if start >= 0 and end > start:
+        try:
+            data = json.loads(response[start:end])
+            if isinstance(data, dict):
+                return data
+        except json.JSONDecodeError:
+            pass
+    return {}
+
+
+def parse_rescore_response(response: str) -> list[dict]:
+    """Parse importance re-score adjustments from LLM."""
+    response = response.strip()
+    if "```json" in response:
+        response = response.split("```json")[1].split("```")[0].strip()
+    elif "```" in response:
+        response = response.split("```")[1].split("```")[0].strip()
+    try:
+        data = json.loads(response)
+        if isinstance(data, list):
+            return data
+    except json.JSONDecodeError:
+        pass
+    start = response.find("[")
+    end = response.rfind("]") + 1
+    if start >= 0 and end > start:
+        try:
+            data = json.loads(response[start:end])
+            if isinstance(data, list):
+                return data
+        except json.JSONDecodeError:
+            pass
     return []
