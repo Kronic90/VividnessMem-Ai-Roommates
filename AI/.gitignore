@@ -1,4 +1,4 @@
-# AI Roommates — only tracked files are committed (see push_to_github.py)
+# AI Roommates — only tracked files are committed
 # This .gitignore blocks everything, we use 'git add -f' for project files.
 
 # Ignore everything by default
@@ -15,7 +15,6 @@
 !task_memory.py
 !requirements.txt
 !README.md
-!push_to_github.py
 !LICENSE
 !tests/
 !tests/**
