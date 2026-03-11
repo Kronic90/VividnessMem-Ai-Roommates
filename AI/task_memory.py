@@ -154,9 +154,13 @@ def _score_relevance(entry: TaskEntry, query_lower: str, query_words: set[str]) 
 #    - Accessing a memory makes it more vivid (positive feedback)
 # ═══════════════════════════════════════════════════════════════════════════
 class AriaTaskMemory:
-    """Organic task memory — experiences surface by vividness, like real recall."""
+    """Organic task memory — experiences surface by vividness, like real recall.
 
-    MAX_ENTRIES = 200
+    No hard cap on total entries — Aria never fully forgets.
+    Only ACTIVE_LIMIT entries get injected into context (the rest remain
+    searchable via recall/resonance when triggered by conversation).
+    """
+
     ACTIVE_LIMIT = 4  # how many vivid entries to inject into context
 
     def __init__(self):
@@ -168,10 +172,6 @@ class AriaTaskMemory:
     def add(self, entry: TaskEntry):
         """Journal a new experience."""
         self.entries.append(entry)
-        if len(self.entries) > self.MAX_ENTRIES:
-            # Fade: drop the least vivid entries (organic forgetting)
-            self.entries.sort(key=lambda e: e.vividness, reverse=True)
-            self.entries = self.entries[:self.MAX_ENTRIES]
         self.save()
 
     def search(self, query: str, limit: int = 3) -> list[TaskEntry]:

@@ -290,17 +290,26 @@ class AriaMemory:
     def _load(self):
         # Self memory
         if SELF_FILE.exists():
-            with open(SELF_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            self.self_reflections = [Reflection.from_dict(d) for d in data]
+            try:
+                with open(SELF_FILE, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, list):
+                    self.self_reflections = [Reflection.from_dict(d) for d in data if isinstance(d, dict) and "content" in d]
+            except (json.JSONDecodeError, KeyError, TypeError) as e:
+                print(f"[AriaMemory] Warning: corrupt self_memory.json, starting fresh ({e})")
+                self.self_reflections = []
 
         # Social memory
         if SOCIAL_DIR.exists():
             for fpath in SOCIAL_DIR.glob("*.json"):
                 entity = fpath.stem.replace("_", " ").title()
-                with open(fpath, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                self.social_impressions[entity] = [Reflection.from_dict(d) for d in data]
+                try:
+                    with open(fpath, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    if isinstance(data, list):
+                        self.social_impressions[entity] = [Reflection.from_dict(d) for d in data if isinstance(d, dict) and "content" in d]
+                except (json.JSONDecodeError, KeyError, TypeError) as e:
+                    print(f"[AriaMemory] Warning: corrupt {fpath.name}, skipping ({e})")
 
     # ─── Stats ────────────────────────────────────────────────────────
 
