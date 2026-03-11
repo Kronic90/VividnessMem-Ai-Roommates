@@ -671,6 +671,20 @@ class ConversationEngine:
                             f"[Aria] {len(resonant)} old memory(ies) resurfaced"
                         )
 
+            # ── Task Recall: surface relevant task lessons (Aria only) ──
+            if short_name == "Aria" and len(my_history) >= 2:
+                last_msg = my_history[-1].get("content", "")
+                if isinstance(last_msg, str) and len(last_msg) > 20:
+                    task_block = self.aria_task_memory.recall_context_block(last_msg)
+                    if task_block:
+                        if isinstance(my_history[-1]["content"], str):
+                            my_history[-1]["content"] += f"\n\n{task_block}"
+                        recalled_count = len(self.aria_task_memory.recall(last_msg))
+                        self.signals.append_message.emit(
+                            "\U0001f9e0 Task Recall", "#ffb74d",
+                            f"[Aria] {recalled_count} past task experience(s) recalled"
+                        )
+
             self.signals.status_update.emit(f"Turn {turn + 1}/{max_turns} — {short_name} is thinking…")
 
             # ── Agentic inner loop: generate → tools → react → repeat ──
@@ -951,17 +965,15 @@ class ConversationEngine:
     def _get_task_context(self, ai_name: str, history: list[dict]) -> str:
         """Search task memory for entries relevant to the recent conversation.
 
-        Uses each AI's native retrieval style:
-          Aria — vividness-ranked organic recall
-          Rex  — core always present + archival keyword search
+        DEPRECATED: Aria now uses recall_context_block() triggered organically
+        per-turn in the conversation loop. Rex still uses context block style.
         """
-        # Build query from last few non-system messages
         recent = [m["content"] for m in history[-4:] if m["role"] != "system"]
         query = " ".join(recent)
         if not query.strip():
             return ""
         if ai_name == "Aria":
-            return self.aria_task_memory.get_context_block(query)
+            return self.aria_task_memory.recall_context_block(query)
         else:
             return self.rex_task_memory.get_context_block(query)
 

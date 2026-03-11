@@ -222,7 +222,110 @@ class AriaTaskMemory:
                 lines.append(f"  \u2192 {e.reflection}")
         return "\n".join(lines)
 
-    # ─── Persistence ──────────────────────────────────────────────────
+    # ─── Action-type patterns (detect what she's about to do) ─────────
+    _ACTION_SIGNALS = {
+        "file_write": {"write", "create", "save", "append", "file", "document", "draft"},
+        "file_read":  {"read", "open", "contents", "check", "look", "examine"},
+        "code":       {"code", "script", "python", "calculate", "simulate", "algorithm", "function"},
+        "simulation": {"simulate", "simulation", "model", "parameters", "variables", "test"},
+        "analysis":   {"analyze", "analyse", "compare", "evaluate", "measure", "results"},
+        "worldbuild": {"lore", "world", "society", "faction", "aetheria", "culture", "narrative"},
+    }
+
+    def recall(self, context: str, limit: int = 3) -> list[TaskEntry]:
+        """Human-style task recall -- only surfaces when something triggers it.
+
+        Like a person thinking "wait, I've done this before..." when starting
+        a task that reminds them of past experience. Returns nothing if the
+        current context doesn't connect to any past task.
+
+        NOT a search engine. Works by:
+          1. Detect what kind of task is happening (writing, coding, simulating...)
+          2. Find past experiences with topic overlap (prefix matching, no embeddings)
+          3. Only return memories with genuine connection (2+ word matches)
+          4. Rank by vividness (recent + important + frequently-accessed wins)
+        """
+        if not context or not self.entries:
+            return []
+
+        context_lower = context.lower()
+        context_words = set(re.findall(r"\b[a-zA-Z]{4,}\b", context_lower)) - _STOP_WORDS
+        if not context_words:
+            return []
+
+        # Step 1: Detect current action type from context
+        active_actions: set[str] = set()
+        for action_type, signals in self._ACTION_SIGNALS.items():
+            if context_words & signals:
+                active_actions.add(action_type)
+
+        # Step 2: Score each memory by topic overlap + action match
+        context_prefixes = {w[:5] for w in context_words if len(w) >= 5}
+        scored: list[tuple[float, TaskEntry]] = []
+
+        for entry in self.entries:
+            # Only consider deliberate reflections (imp >= 5) --
+            # auto-captured noise ("Written: file.md") isn't a lesson
+            if entry.importance < 5:
+                continue
+
+            entry_text = f"{entry.summary} {entry.reflection} {' '.join(entry.keywords)}".lower()
+            entry_words = set(re.findall(r"\b[a-zA-Z]{4,}\b", entry_text)) - _STOP_WORDS
+            entry_prefixes = {w[:5] for w in entry_words if len(w) >= 5}
+
+            # Prefix overlap (handles plurals, conjugations)
+            prefix_overlap = len(context_prefixes & entry_prefixes)
+            # Explicit keyword hits (tagged by the AI itself)
+            keyword_hits = sum(1 for kw in entry.keywords if kw.lower() in context_lower)
+
+            total_match = prefix_overlap + (keyword_hits * 2)
+
+            if total_match < 2:
+                continue  # not enough connection -- don't surface
+
+            # Action type bonus: if she's doing the same KIND of thing
+            action_bonus = 0.0
+            entry_action_words = set(re.findall(r"\b[a-zA-Z]{4,}\b", entry_text))
+            for action_type in active_actions:
+                if entry_action_words & self._ACTION_SIGNALS[action_type]:
+                    action_bonus += 1.5
+
+            score = total_match + action_bonus + (entry.importance * 0.15)
+            scored.append((score, entry))
+
+        if not scored:
+            return []
+
+        # Step 3: Among matches, rank by vividness (organic -- recent+accessed wins)
+        scored.sort(key=lambda x: (x[0], x[1].vividness), reverse=True)
+        results = [entry for _, entry in scored[:limit]]
+
+        # Touch -- she remembered this, it becomes more vivid
+        for e in results:
+            e.touch()
+
+        return results
+
+    def recall_context_block(self, context: str) -> str:
+        """Build a lesson-first context block from recalled task memories.
+
+        Only returns text if the context triggers a genuine recall.
+        Leads with what she LEARNED, not just what she did.
+        """
+        recalled = self.recall(context)
+        if not recalled:
+            return ""
+        lines = ["(Past experiences that feel relevant to what we're doing now:)"]
+        for e in recalled:
+            if e.reflection:
+                # Lead with the lesson
+                lines.append(f"-- I learned: {e.reflection}")
+                lines.append(f"   (from: {e.summary[:80]})")
+            else:
+                lines.append(f"-- {e.summary}")
+        return "\n".join(lines)
+
+    # ─── Persistence (Aria) ───────────────────────────────────────────
 
     def save(self):
         self.data_dir.mkdir(parents=True, exist_ok=True)
