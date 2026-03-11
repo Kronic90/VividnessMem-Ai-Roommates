@@ -13,6 +13,9 @@ import sys
 import os
 from datetime import datetime, timedelta
 
+# Add parent dir to path so we can import project modules
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
 # ---------------------------------------------------------------------------
 #  Isolate test data — redirect storage to a temp directory so we never
 #  touch real memories on disk.

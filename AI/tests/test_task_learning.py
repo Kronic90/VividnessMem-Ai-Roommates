@@ -7,11 +7,15 @@ Checks: retrieval quality, search relevance, learning progression,
 """
 
 import sys
+import os
 import json
 from datetime import datetime
 from pathlib import Path
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+# Add parent dir to path so we can import project modules
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 # Import from the actual project
 from task_memory import (
@@ -22,7 +26,7 @@ from task_memory import (
     _score_relevance,
 )
 
-DATA_ROOT = Path(__file__).parent / "ai_dialogue_data"
+DATA_ROOT = Path(__file__).parent.parent / "ai_dialogue_data"
 
 pass_count = 0
 fail_count = 0

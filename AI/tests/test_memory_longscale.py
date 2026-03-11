@@ -14,7 +14,12 @@ import os
 import random
 import tempfile
 from datetime import datetime, timedelta
+
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 from pathlib import Path
+
+# Add parent dir to path so we can import project modules
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 # ---------------------------------------------------------------------------
 #  Isolate test data in temp dir

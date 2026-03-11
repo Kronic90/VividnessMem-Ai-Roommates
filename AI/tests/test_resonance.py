@@ -11,10 +11,14 @@ Validates that:
 """
 
 import sys
+import os
 import tempfile
 import json
 from datetime import datetime, timedelta
 from pathlib import Path
+
+# Add parent dir to path so we can import project modules
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 # ─── Patch data dirs to use temp directory ────────────────────────────
 _tmp = tempfile.mkdtemp(prefix="resonance_test_")

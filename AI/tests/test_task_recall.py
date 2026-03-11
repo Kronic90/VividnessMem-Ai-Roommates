@@ -22,7 +22,9 @@ import os
 import unittest
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-sys.path.insert(0, os.path.dirname(__file__))
+
+# Add parent dir to path so we can import project modules
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from task_memory import AriaTaskMemory, TaskEntry
 
