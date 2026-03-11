@@ -91,12 +91,18 @@ class Reflection:
         importance: int = 5,     # 1-10, tagged by the LLM
         source: str = "",        # what conversation/entity triggered this
         timestamp: str = "",
+        why_saved: str = "",     # why she chose to save this moment
+        why_importance: str = "",# why she rated it this importance
+        why_emotion: str = "",   # why she tagged it with this emotion
     ):
         self.content = content
         self.emotion = emotion
         self.importance = importance
         self.source = source
         self.timestamp = timestamp or datetime.now().isoformat()
+        self.why_saved = why_saved
+        self.why_importance = why_importance
+        self.why_emotion = why_emotion
         # Organic decay: memories lose vividness over time
         # but high-importance ones resist fading
         self._access_count = 0
@@ -117,7 +123,7 @@ class Reflection:
         return (self.importance * 0.6) + (recency_score * 0.3) + (access_bonus * 0.1)
 
     def to_dict(self) -> dict:
-        return {
+        d = {
             "content": self.content,
             "emotion": self.emotion,
             "importance": self.importance,
@@ -125,6 +131,13 @@ class Reflection:
             "timestamp": self.timestamp,
             "access_count": self._access_count,
         }
+        if self.why_saved:
+            d["why_saved"] = self.why_saved
+        if self.why_importance:
+            d["why_importance"] = self.why_importance
+        if self.why_emotion:
+            d["why_emotion"] = self.why_emotion
+        return d
 
     @classmethod
     def from_dict(cls, d: dict) -> "Reflection":
@@ -134,6 +147,9 @@ class Reflection:
             importance=d.get("importance", 5),
             source=d.get("source", ""),
             timestamp=d.get("timestamp", ""),
+            why_saved=d.get("why_saved", ""),
+            why_importance=d.get("why_importance", ""),
+            why_emotion=d.get("why_emotion", ""),
         )
         r._access_count = d.get("access_count", 0)
         return r
@@ -390,6 +406,11 @@ Write down what you want to remember. You have two journals:
    spoke with): what they're like, what surprised you, what you agree or
    disagree on, how they made you feel.
 
+For each memory, also explain your reasoning:
+- WHY you chose to save this particular moment (what made it worth remembering?)
+- WHY you gave it that importance score (what makes it a 3 vs a 9?)
+- WHY that emotion felt like the right tag (what about the moment triggered that feeling?)
+
 For each memory, output it in this exact JSON format:
 
 ```json
@@ -398,7 +419,10 @@ For each memory, output it in this exact JSON format:
     "bank": "self" or "social",
     "content": "write this naturally, like a journal entry — in your own voice",
     "emotion": "how this makes you feel — in your own words",
-    "importance": 1-10
+    "importance": 1-10,
+    "why_saved": "why you chose to remember this moment specifically",
+    "why_importance": "why you rated it this importance — what makes it significant or not",
+    "why_emotion": "why this emotion — what about the moment triggered this feeling"
   }
 ]
 ```

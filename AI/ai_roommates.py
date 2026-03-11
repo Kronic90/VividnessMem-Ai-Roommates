@@ -1041,6 +1041,9 @@ class ConversationEngine:
                     emotion=entry.get("emotion", ""),
                     importance=entry.get("importance", 5),
                     source="Rex" if bank == "social" else "self-reflection",
+                    why_saved=entry.get("why_saved", ""),
+                    why_importance=entry.get("why_importance", ""),
+                    why_emotion=entry.get("why_emotion", ""),
                 )
                 if bank == "social":
                     self.aria_memory.add_social_impression("Rex", r)
