@@ -26,6 +26,35 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+# Minimum word-overlap ratio to consider two memories duplicates
+_DEDUP_THRESHOLD = 0.80
+
+
+def _content_words(text: str) -> set[str]:
+    """Extract meaningful lowercase words (4+ chars) from text."""
+    return {
+        w for w in re.findall(r"\b[a-zA-Z]{4,}\b", text.lower())
+    } - _DEDUP_STOP
+
+
+def _overlap_ratio(a: set[str], b: set[str]) -> float:
+    """Jaccard similarity between two word sets."""
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
+
+
+# Words too common to count in dedup OR resonance
+_DEDUP_STOP = {
+    "the", "and", "for", "that", "this", "with", "from", "was",
+    "are", "not", "but", "you", "your", "have", "has", "had",
+    "been", "will", "would", "could", "should", "can", "did",
+    "does", "just", "about", "they", "them", "what", "when",
+    "turn", "session", "conversation", "here", "there", "also",
+    "like", "know", "think", "said", "really", "going", "right",
+    "something", "things", "thing", "well", "yeah", "okay",
+}
+
 # Words too common to trigger resonance
 _RESONANCE_STOP = {
     "the", "and", "for", "that", "this", "with", "from", "was",
@@ -146,14 +175,35 @@ class AriaMemory:
     # ─── Add Memories ─────────────────────────────────────────────────
 
     def add_self_reflection(self, reflection: Reflection):
-        """Add a new self-reflection to the journal."""
+        """Add a new self-reflection, merging if near-duplicate exists."""
+        new_words = _content_words(reflection.content)
+        for existing in self.self_reflections:
+            if _overlap_ratio(new_words, _content_words(existing.content)) >= _DEDUP_THRESHOLD:
+                # Merge: keep the longer/richer content, boost the existing memory
+                if len(reflection.content) > len(existing.content):
+                    existing.content = reflection.content
+                existing.importance = max(existing.importance, reflection.importance)
+                if reflection.emotion and len(reflection.emotion) > len(existing.emotion):
+                    existing.emotion = reflection.emotion
+                existing.touch()  # reinforce — she thought about this again
+                return
         self.self_reflections.append(reflection)
 
     def add_social_impression(self, entity: str, reflection: Reflection):
-        """Add an impression about another entity."""
+        """Add an impression about another entity, merging if near-duplicate."""
         reflection.source = entity
         if entity not in self.social_impressions:
             self.social_impressions[entity] = []
+        new_words = _content_words(reflection.content)
+        for existing in self.social_impressions[entity]:
+            if _overlap_ratio(new_words, _content_words(existing.content)) >= _DEDUP_THRESHOLD:
+                if len(reflection.content) > len(existing.content):
+                    existing.content = reflection.content
+                existing.importance = max(existing.importance, reflection.importance)
+                if reflection.emotion and len(reflection.emotion) > len(existing.emotion):
+                    existing.emotion = reflection.emotion
+                existing.touch()
+                return
         self.social_impressions[entity].append(reflection)
 
     # ─── Surface Memories (by vividness) ──────────────────────────────

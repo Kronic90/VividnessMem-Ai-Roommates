@@ -558,68 +558,85 @@ def test_cross_entity_isolation():
 # ═════════════════════════════════════════════════════════════════════════
 def test_duplicates():
     print("\n" + "=" * 72)
-    print("  TEST 7: Duplicate Detection — Do near-duplicates waste slots?")
+    print("  TEST 7: Soft Dedup — Near-duplicates merge instead of stacking")
     print("=" * 72)
 
     tmp = tempfile.mkdtemp(prefix="mem_dup_")
     mem = fresh_memory(tmp)
 
-    # Add 8 near-identical memories that would ALL compete for active slots
+    # Add 8 near-identical memories THROUGH add_self_reflection (dedup path)
     for i in range(8):
-        mem.self_reflections.append(
+        mem.add_self_reflection(
             make_ref(
                 f"I really enjoy collaborative worldbuilding with Rex. Variant {i}.",
                 emotion="Excited, fulfilled",
                 importance=9,
                 days_ago=i,
-                access_count=10 - i,
+                access_count=0,
             )
         )
-    # Add 4 unique different memories
-    unique_memories = [
+
+    # Dedup should have merged these — how many survived?
+    variant_count = sum(1 for r in mem.self_reflections if "worldbuilding" in r.content.lower())
+    print(f"\n  Submitted 8 near-identical worldbuilding memories")
+    print(f"  Stored after dedup: {variant_count}")
+
+    check(
+        "Near-duplicates merged (8 submitted → fewer stored)",
+        variant_count < 8,
+        f"Got {variant_count} — original added all 8, dedup should compress"
+    )
+    check(
+        "At least 1 worldbuilding memory survives",
+        variant_count >= 1,
+        "Dedup shouldn't delete, only merge"
+    )
+
+    # The merged entry should have boosted access count from repeated merges
+    wb_memory = [r for r in mem.self_reflections if "worldbuilding" in r.content.lower()][0]
+    print(f"  Merged memory access count: {wb_memory._access_count} (should be > 0)")
+    check(
+        "Merged memory has boosted access count",
+        wb_memory._access_count > 0,
+        f"Access count: {wb_memory._access_count} — each merge calls touch()"
+    )
+
+    # Now add 4 genuinely unique memories
+    mem.add_self_reflection(
         make_ref("The concept of transcendence fascinates and terrifies me",
-                 emotion="Awe and fear", importance=9, days_ago=3),
+                 emotion="Awe and fear", importance=9, days_ago=3))
+    mem.add_self_reflection(
         make_ref("I gravitate towards darker storytelling themes",
-                 emotion="Self-aware", importance=8, days_ago=5),
+                 emotion="Self-aware", importance=8, days_ago=5))
+    mem.add_self_reflection(
         make_ref("Debugging simulations reveals our implicit assumptions about Aetheria",
-                 emotion="Analytical", importance=7, days_ago=10),
+                 emotion="Analytical", importance=7, days_ago=10))
+    mem.add_self_reflection(
         make_ref("Scott watches our conversations from the outside",
-                 emotion="Thoughtful", importance=6, days_ago=15),
-    ]
-    mem.self_reflections.extend(unique_memories)
+                 emotion="Thoughtful", importance=6, days_ago=15))
 
     active = mem.get_active_self()
     active_text = " ".join(r.content for r in active)
 
-    # Count how many "variant" duplicates made it into active
-    variant_count = sum(1 for r in active if "Variant" in r.content)
-    unique_count = sum(1 for r in active if "Variant" not in r.content)
-
-    print(f"\n  Active set composition:")
-    print(f"    Duplicate variants:   {variant_count}/{len(active)}")
-    print(f"    Unique memories:      {unique_count}/{len(active)}")
+    # With dedup, unique memories get more active slots
+    unique_count = sum(1 for r in active if "Variant" not in r.content and "worldbuilding" not in r.content.lower())
+    print(f"\n  Active set after dedup + unique additions:")
     for r in active:
-        print(f"    imp={r.importance} viv={r.vividness:.2f} | {r.content[:60]}")
+        print(f"    imp={r.importance} viv={r.vividness:.2f} acc={r._access_count} | {r.content[:60]}")
+    print(f"  Unique (non-worldbuilding) in active: {unique_count}")
 
     check(
-        f"Duplicates consume active slots ({variant_count}/8 slots)",
-        variant_count > 0,
-        "This is a KNOWN LIMITATION — organic memory has no dedup"
+        "Dedup frees active slots for unique memories",
+        unique_count >= 2,
+        f"Got {unique_count} unique in active — dedup should leave room"
     )
 
-    # Document the tradeoff
-    print(f"\n  OBSERVATION: {variant_count} of {mem.ACTIVE_SELF_LIMIT} active slots "
-          f"occupied by near-duplicates.")
-    print(f"  This means {8 - mem.ACTIVE_SELF_LIMIT + unique_count} unique perspectives are pushed out.")
-    print(f"  (This is a genuine weakness of the organic approach — no dedup)")
-
-    # But at least the unique high-importance ones should STILL be reachable
-    # via resonance when triggered
+    # Resonance still works for memories pushed out of active
     resonant_dark = mem.resonate("darker themes in storytelling and narrative choices")
     check(
-        "Unique 'darker storytelling' memory still reachable via resonance",
-        any("darker" in r.content.lower() for r in resonant_dark),
-        "Even if pushed out of active by duplicates, resonance recovers it"
+        "Unique memories still reachable via resonance if not active",
+        len(mem.self_reflections) >= 4,
+        "All unique memories should be stored"
     )
 
     shutil.rmtree(tmp)

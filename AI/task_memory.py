@@ -29,6 +29,26 @@ from pathlib import Path
 
 DATA_ROOT = Path(__file__).parent / "ai_dialogue_data"
 
+# ─── Soft dedup helpers ────────────────────────────────────────────────────
+_DEDUP_THRESHOLD = 0.80
+_DEDUP_STOP = {
+    "the", "and", "for", "that", "this", "with", "from", "was",
+    "are", "not", "but", "you", "your", "have", "has", "had",
+    "been", "will", "would", "could", "should", "can", "did",
+    "does", "just", "about", "they", "them", "what", "when",
+    "something", "things", "thing", "well", "yeah", "okay",
+}
+
+
+def _content_words(text: str) -> set[str]:
+    return {w for w in re.findall(r"\b[a-zA-Z]{4,}\b", text.lower())} - _DEDUP_STOP
+
+
+def _overlap_ratio(a: set[str], b: set[str]) -> float:
+    if not a or not b:
+        return 0.0
+    return len(a & b) / len(a | b)
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  Task Entry  (shared data structure)
@@ -170,7 +190,21 @@ class AriaTaskMemory:
         self._load()
 
     def add(self, entry: TaskEntry):
-        """Journal a new experience."""
+        """Journal a new experience, merging if near-duplicate exists."""
+        new_words = _content_words(f"{entry.summary} {entry.reflection}")
+        for existing in self.entries:
+            old_words = _content_words(f"{existing.summary} {existing.reflection}")
+            if _overlap_ratio(new_words, old_words) >= _DEDUP_THRESHOLD:
+                # Merge: keep richer content, boost existing
+                if len(entry.summary) > len(existing.summary):
+                    existing.summary = entry.summary
+                if len(entry.reflection) > len(existing.reflection):
+                    existing.reflection = entry.reflection
+                existing.importance = max(existing.importance, entry.importance)
+                existing.keywords = list(set(existing.keywords) | set(entry.keywords))
+                existing.touch()
+                self.save()
+                return
         self.entries.append(entry)
         self.save()
 
