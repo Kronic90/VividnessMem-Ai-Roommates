@@ -303,7 +303,7 @@ class Signals(QObject):
 #  Conversation engine (runs in a background thread)
 # ═══════════════════════════════════════════════════════════════════════════
 class ConversationEngine:
-    def __init__(self, signals: Signals, gpu_layers: int = 40, ctx_size: int = 16192):
+    def __init__(self, signals: Signals, gpu_layers: int = 40, ctx_size: int = 8192):
         self.signals = signals
         self.gpu_layers = gpu_layers
         self.ctx_size = ctx_size
@@ -901,6 +901,13 @@ class ConversationEngine:
             self._log(short_name, full_reply)
             self.signals.turn_finished.emit()
 
+            # ── Mood update: let conversation tone nudge Aria's mood ──
+            if short_name == "Aria":
+                try:
+                    self.aria_memory.update_mood_from_conversation(full_reply)
+                except Exception:
+                    pass  # mood is optional — don't break the conversation
+
             turn += 1
             next_idx = 1 - next_idx  # alternate
 
@@ -1067,6 +1074,10 @@ class ConversationEngine:
                     f"Session {session_num}: Aria is re-evaluating memory importance\u2026")
                 prompt, indexed = self.aria_memory.prepare_rescore_prompt()
                 if prompt:
+                    # Include contradiction context so Aria can resolve conflicts
+                    contra_ctx = self.aria_memory.get_contradiction_context()
+                    if contra_ctx:
+                        prompt += f"\n\n{contra_ctx}"
                     history = [
                         {"role": "system", "content": GEMMA_SYSTEM},
                         {"role": "user", "content": prompt},
@@ -1077,6 +1088,22 @@ class ConversationEngine:
                         self.aria_memory.apply_rescores(adjustments, indexed)
                         self.signals.status_update.emit(
                             f"Aria re-scored {len(adjustments)} memories.")
+
+            # ── Memory consolidation ("sleep") ──
+            consolidation_prompt = self.aria_memory.prepare_consolidation_prompt()
+            if consolidation_prompt:
+                self.signals.status_update.emit(
+                    "Aria is consolidating related memories…")
+                history = [
+                    {"role": "system", "content": GEMMA_SYSTEM},
+                    {"role": "user", "content": consolidation_prompt},
+                ]
+                response = self._generate(self.gemma, history)
+                gists = parse_rescore_response(response)  # same JSON array format
+                if gists:
+                    self.aria_memory.apply_consolidation(gists)
+                    self.signals.status_update.emit(
+                        f"Aria consolidated {len(gists)} memory cluster(s).")
 
             self.aria_memory._save_brief()
             self.aria_memory.save()

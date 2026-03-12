@@ -13,9 +13,9 @@ To stress-test this approach, two AI agents with different memory architectures 
 
 Both agents talk autonomously, curate their own memories, and maintain persistent identities across sessions.
 
-## Verified: 161 Tests, 0 Failures
+## Verified: 233 Tests, 0 Failures
 
-The organic memory system has been rigorously tested across three suites covering mechanical correctness, behavioral proof-of-life, and the compressed-brief / retrospective-rescore lifecycle. All test code and results are in the repository for review.
+The organic memory system has been rigorously tested across four suites covering mechanical correctness, behavioral proof-of-life, the compressed-brief / retrospective-rescore lifecycle, and the six advanced memory features. All test code and results are in the repository for review.
 
 ### Robustness Suite — 63/63 passing
 
@@ -61,12 +61,28 @@ Verifies the compressed-brief and retrospective-rescore lifecycle.
 | **Session Tracking** | Session counter persists correctly and triggers briefs/rescores at the right intervals |
 | **Full Cycle** | End-to-end: sessions accumulate → brief fires → rescore fires → context reflects updates |
 
+### Advanced Memory Suite — 72/72 passing
+
+Verifies the six advanced memory features: mood-congruent recall, spaced-repetition decay, emotional reappraisal, contradiction detection, memory consolidation, and associative chains.
+
+| Test | What it proves |
+|---|---|
+| **Emotion Vector Mapping** | 40+ emotions mapped to PAD (Pleasure-Arousal-Dominance) 3D space, prefix matching, bounded values |
+| **Spaced-Repetition Decay** | Exponential forgetting curve, stability grows with well-spaced access, rapid re-access doesn't game the system |
+| **Mood-Congruent Recall** | Happy mood surfaces happy memories first; sad mood surfaces sad ones; mood shifts with conversation tone; mood decays toward neutral |
+| **Emotional Reappraisal** | Rescore cycle can update emotion tags alongside importance; empty/invalid emotions rejected; original preserved when no change |
+| **Contradiction Detection** | Opposing memories flagged; unrelated topics ignored; low-importance contradictions filtered; contradiction context injected |
+| **Memory Consolidation** | Related memory clusters found; unrelated memories excluded; gists stored with dedup; too-short/duplicate gists rejected |
+| **Associative Chains** | Memory graph built from shared content words; connected memories reachable via multi-hop traversal; isolated memories unreachable |
+| **Integration** | Context block includes mood indicator, contradiction flags; serialisation round-trips new fields; mood feedback loop is bounded |
+
 ### Test Files
 
 All test code and results are in the [`tests/`](tests/) directory:
 
 | File | Description |
 |---|---|
+| `test_advanced_memory.py` | Advanced memory features suite (72 assertions) |
 | `test_memory_robustness.py` | Robustness suite source (63 assertions) |
 | `test_memory_robustness_results.txt` | Full output from last run |
 | `test_behavioral_integration.py` | Behavioral suite source (29 assertions) |
@@ -90,17 +106,14 @@ vividness = (importance × 0.6) + (recency × 0.3) + (access_bonus × 0.1)
 ```
 
 - **Importance (60%)** — how significant the AI rated the memory (1–10), set at creation time
-- **Recency (30%)** — starts at 10, loses 1 point per day. A 10-day-old memory has recency 0
+- **Recency (30%)** — exponential decay: `10 × e^(-age_days / stability)`. New memories start with stability = 3 days. Well-spaced access increases stability (Ebbinghaus-inspired spaced repetition)
 - **Access bonus (10%)** — capped at 3.0, grows by 0.5 each time the memory is accessed
 
-This means:
-- A brand-new trivial thought (imp=3, age=0) scores **4.8** — present but weak
-- A 30-day-old emotional breakthrough (imp=9, age=30) scores **5.4** — still alive
-- A frequently revisited insight (imp=8, age=5, accessed 6×) scores **6.6** — vivid
+Mood-congruent recall adds a further adjustment: memories whose emotional tone aligns with the current mood get a slight vividness boost, while emotionally incongruent memories are slightly suppressed.
 
 ### No RAG, No Embeddings
 
-Retrieval is not search. The top-K most vivid memories are always injected into context (bounded by `ACTIVE_SELF_LIMIT=8`). Older memories are reached only through **resonance** — keyword overlap between the current conversation and stored memory text, using prefix matching to handle conjugation. This is associative recall, not semantic search. It's imperfect by design — just like human memory.
+Retrieval is not search. The top-K most vivid memories are always injected into context (bounded by `ACTIVE_SELF_LIMIT=8`). Older memories are reached through **resonance** — keyword overlap between the current conversation and stored memory text, using prefix matching to handle conjugation. Resonance is augmented by **associative chains**: when a memory resurfaces, connected memories (sharing ≥2 content words) are traversed via a multi-hop graph walk, pulling in conceptually related memories that didn't directly match the keywords. This is associative recall, not semantic search. It's imperfect by design — just like human memory.
 
 ### Soft Deduplication
 
@@ -118,11 +131,11 @@ Every few sessions, Aria reads all her memories and writes a **compressed self-u
 
 The brief is written by Aria herself, not programmatically summarised. This means her compressed understanding reflects her own interpretive lens, not a mechanical reduction.
 
-### Retrospective Re-scoring
+### Retrospective Re-scoring & Emotional Reappraisal
 
 Every few sessions, Aria re-evaluates the importance of her existing memories in light of everything she now knows. Importance scores can shift by ±2 per cycle, allowing early memories that turned out to be foundational to gain significance, and memories that seemed important but led nowhere to fade.
 
-This addresses the "static importance" problem — where a memory's importance is frozen at the moment of creation and never revisited.
+The rescore cycle now also includes **emotional reappraisal**: Aria can update the emotion tag on a memory if her feelings about it have evolved. Initial anger may soften into understanding, or something that felt neutral may come to feel bittersweet. This mirrors how humans' emotional relationship to memories changes over time.
 
 ### Metacognitive Rationale
 
@@ -137,6 +150,24 @@ These fields are written by the AI during curation and serve two purposes: they 
 ### Unlimited Storage, Bounded Context
 
 There is no hard cap on total memories — Aria never fully forgets. Only `ACTIVE_LIMIT` entries get injected into the prompt (~1,277 tokens worst case vs 65,536 context budget). The rest exist on disk, reachable via resonance when conversation triggers them.
+
+### Mood-Congruent Recall
+
+Aria maintains an internal mood state modelled on the PAD (Pleasure-Arousal-Dominance) framework — a 3D emotional space that 40+ named emotions are mapped to. The mood shifts gradually based on conversation tone: positive conversations nudge mood positive, negative ones nudge it negative. Mood always decays toward neutral between turns to prevent runaway feedback.
+
+When mood is non-neutral, it biases which memories surface: happy mood makes happy memories feel more vivid (and suppresses sad ones), while sad mood does the reverse. This creates a realistic feedback loop — mood colours what you remember, and what you remember reinforces the mood — bounded by decay to prevent spiralling.
+
+### Contradiction Detection
+
+The system automatically scans for pairs of memories that may contradict each other: same-topic memories with opposing emotional valence or negation patterns. Detected contradictions are flagged in the context block during re-scoring, giving Aria the opportunity to notice and resolve internal conflicts rather than holding contradictory beliefs indefinitely.
+
+### Memory Consolidation
+
+At maintenance time, related memory clusters (3+ memories with 25-80% keyword overlap) are identified and presented to Aria for synthesis. She writes a "gist" memory that captures what the cluster of experiences means as a whole — a higher-level understanding that emerges from repeated related experiences. Gists are deduplicated and stored with `source=consolidation` for tracking.
+
+### Associative Chains
+
+Memories are connected in a weighted graph based on shared content words. When resonance triggers a memory, the graph is walked up to 2 hops to find conceptually adjacent memories. An associated memory must also share at least one context word to prevent off-topic leakage. This models how remembering one thing naturally brings related things to mind.
 
 ## What It Actually Does
 
@@ -181,7 +212,12 @@ tests/              Full test suites with results
 - **Soft deduplication** — near-duplicate memories merge instead of stacking
 - **Associative resonance** — old memories resurface when conversation triggers keyword overlap
 - **Compressed briefs** — periodic AI-written self-understanding that sits above individual memories
-- **Retrospective re-scoring** — importance scores are re-evaluated every few sessions, not frozen at creation
+- **Retrospective re-scoring & emotional reappraisal** — importance scores and emotion tags are re-evaluated every few sessions
+- **Mood-congruent recall** — current mood biases which memories surface (PAD emotional model)
+- **Spaced-repetition decay** — exponential forgetting with stability growth from well-spaced access
+- **Contradiction detection** — opposing memories flagged in context for resolution
+- **Memory consolidation** — related memory clusters synthesised into gist memories
+- **Associative chains** — multi-hop memory graph traversal during resonance
 - **Metacognitive rationale** — each memory records *why* it was saved, rated, and emotionally tagged
 - **Asymmetric dual-LLM design** — two different models, backends, and capabilities
 - **AI-controlled memory curation** — they decide what to remember and how to describe it
@@ -242,10 +278,13 @@ All test results are committed to the repo so you can see exactly what was teste
 
 ## Known Limitations
 
-- **Resonance is prefix-based, not semantic** — "quantum entanglement" finds "quantum" but won't find "particle physics." Associative recall only fires on literal word overlap.
+- **Resonance is prefix-based, not semantic** — "quantum entanglement" finds "quantum" but won't find "particle physics." Associative chains extend reach but still depend on literal word overlap.
 - **No concurrent access** — single-threaded file I/O. Multiple processes hitting the same memory files would race.
-- **Scale ceiling untested beyond 1,001** — performance is excellent at 1K memories but months of daily use could push 5–10K+. The O(n) sort should still be fast but is unverified at that scale.
-- **Metacognitive rationale can canonise bad interpretations** — if Aria misinterprets why a memory matters, the stored rationale may reinforce that misinterpretation in future curation. Retrospective re-scoring partially mitigates this but doesn't fully solve it.
+- **Scale ceiling untested beyond 5K** — performance is excellent at 5K memories (surfacing in ~100ms) but months of daily use could push beyond this.
+- **Mood feedback is bounded but not perfectly tuned** — the decay rate and influence strength are reasonable defaults, not empirically optimised.
+- **Contradiction detection is lexical** — it catches negation patterns and emotional reversals on shared topics, but subtle semantic contradictions (e.g. "I prefer evenings" vs "mornings are my best time") will be missed.
+- **Consolidation quality depends on the LLM** — gist generation is only as good as the underlying model's ability to synthesise.
+- **Metacognitive rationale can canonise bad interpretations** — if Aria misinterprets why a memory matters, the stored rationale may reinforce that misinterpretation in future curation. Retrospective re-scoring and emotional reappraisal partially mitigate this but don't fully solve it.
 
 ## License
 

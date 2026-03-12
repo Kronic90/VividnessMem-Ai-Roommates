@@ -65,6 +65,7 @@ def fresh_memory(tmp_dir: str) -> AriaMemory:
     mem = AriaMemory.__new__(AriaMemory)
     mem.self_reflections = []
     mem.social_impressions = {}
+    mem._mood = {d: 0.0 for d in memory_aria.MOOD_DIMENSIONS}
     mem._brief_data = {"session_count": 0, "last_brief_session": 0,
                        "last_rescore_session": 0, "self_brief": "",
                        "entity_briefs": {}}
@@ -267,6 +268,7 @@ def test_save_load_integrity():
     mem = AriaMemory.__new__(AriaMemory)
     mem.self_reflections = []
     mem.social_impressions = {}
+    mem._mood = {d: 0.0 for d in memory_aria.MOOD_DIMENSIONS}
     mem._brief_data = {"session_count": 0, "last_brief_session": 0,
                        "last_rescore_session": 0, "self_brief": "",
                        "entity_briefs": {}}

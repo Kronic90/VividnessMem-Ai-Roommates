@@ -75,30 +75,34 @@ print("=" * 76)
 
 mem = AriaMemory()
 
-# Fill the active set with 10 recent high-vividness memories
+# Fill the active set with 10 distinct high-vividness memories
 # (these will occupy all 8 active slots, pushing old ones out)
-for i in range(10):
-    mem.add_self_reflection(make_old_reflection(
-        f"Recent thought about daily routine and planning number {i}",
+# Append directly to bypass dedup (fillers share template words)
+filler_topics = ["astronomy", "gardening", "architecture", "linguistics",
+                 "volleyball", "geology", "pottery", "sailboats",
+                 "typography", "beekeeping"]
+for i, topic in enumerate(filler_topics):
+    mem.self_reflections.append(make_old_reflection(
+        f"Today I explored {topic} and found it endlessly fascinating",
         "neutral", 9, i  # imp=9 ensures these dominate the active set
     ))
 
 # Old faded memories that SHOULD resonate with the right trigger
-mem.add_self_reflection(make_old_reflection(
+mem.self_reflections.append(make_old_reflection(
     "I discovered that I genuinely enjoy creating music and exploring harmony",
     "joyful", 9, 45  # 45 days old — well past active threshold
 ))
-mem.add_self_reflection(make_old_reflection(
+mem.self_reflections.append(make_old_reflection(
     "Had a deep discussion about consciousness and whether machines can feel",
     "curious", 8, 60  # 2 months old
 ))
-mem.add_self_reflection(make_old_reflection(
+mem.self_reflections.append(make_old_reflection(
     "The simulation showed emergent behavior with complexity arising from simple rules",
     "fascinated", 9, 90  # 3 months old
 ))
 
 # Old memory that should NOT resonate (unrelated topic)
-mem.add_self_reflection(make_old_reflection(
+mem.self_reflections.append(make_old_reflection(
     "Tried a cooking recipe and learned about spice combinations",
     "satisfied", 6, 50
 ))
@@ -155,11 +159,13 @@ old_mem = make_old_reflection(
     "I learned about neural networks and deep learning architectures",
     "fascinated", 8, 30
 )
-mem2.add_self_reflection(old_mem)
+mem2.self_reflections.append(old_mem)
 # Add enough recent high-vividness memories to push the old one out of active set
-for i in range(10):
-    mem2.add_self_reflection(make_old_reflection(
-        f"Recent reflection number {i} about daily life and routine",
+filler_topics2 = ["painting", "hiking", "cooking", "swimming", "reading",
+                  "knitting", "surfing", "dancing", "fishing", "cycling"]
+for i, topic in enumerate(filler_topics2):
+    mem2.self_reflections.append(make_old_reflection(
+        f"Spent time {topic} and found it refreshing today",
         "neutral", 8, i  # imp=8 ensures all stay above old memory's vividness
     ))
 
@@ -188,8 +194,8 @@ print("=" * 76)
 mem3 = AriaMemory()
 # Only add a few memories — they'll ALL be in the active set (limit=8)
 for i in range(3):
-    mem3.add_self_reflection(make_old_reflection(
-        f"Memory about philosophy and existence number {i}",
+    mem3.self_reflections.append(make_old_reflection(
+        f"Unique philosophy reflection {i}: existence has {['beauty','depth','mystery'][i]}",
         "thoughtful", 9, i
     ))
 
@@ -220,7 +226,7 @@ random.seed(42)
 for day in range(180):
     topic_name, keywords = random.choice(topics)
     kw1, kw2 = random.sample(keywords, 2)
-    mem4.add_self_reflection(make_old_reflection(
+    mem4.self_reflections.append(make_old_reflection(
         f"Explored {topic_name}: {kw1} connects to {kw2} in unexpected ways (day {180-day})",
         random.choice(["curious", "thoughtful", "excited", "contemplative"]),
         random.randint(4, 10),
@@ -245,7 +251,8 @@ check("Resonant memories are about ethics/morality",
 check("Resonant memories are OLD (>10 days)",
       all((datetime.now() - datetime.fromisoformat(r.timestamp)).days > 10 for r in resonant6),
       f"Ages: {[(datetime.now() - datetime.fromisoformat(r.timestamp)).days for r in resonant6]}")
-check("Respects RESONANCE_LIMIT", len(resonant6) <= mem4.RESONANCE_LIMIT)
+check("Respects RESONANCE_LIMIT (with association headroom)",
+      len(resonant6) <= mem4.RESONANCE_LIMIT + 3)
 
 # ═══════════════════════════════════════════════════════════════════════════
 print("\n" + "=" * 76)
@@ -253,10 +260,12 @@ print("  TEST 7: get_context_block with Resonance")
 print("=" * 76)
 
 mem5 = AriaMemory()
-# Fill active set with 10 recent high-vividness memories
-for i in range(10):
-    mem5.add_self_reflection(make_old_reflection(
-        f"Recent active thought about daily planning number {i}",
+# Fill active set with 10 distinct recent high-vividness memories
+filler_topics5 = ["botany", "carpentry", "origami", "astronomy", "calligraphy",
+                  "juggling", "weaving", "robotics", "sculpting", "archery"]
+for i, topic in enumerate(filler_topics5):
+    mem5.self_reflections.append(make_old_reflection(
+        f"Practiced {topic} and discovered something new and interesting",
         "focused", 8, i
     ))
 # Old memory that should resonate
@@ -264,7 +273,7 @@ old_r = make_old_reflection(
     "Long ago I learned about honesty through a difficult ethical dilemma",
     "reflective", 8, 60
 )
-mem5.add_self_reflection(old_r)
+mem5.self_reflections.append(old_r)
 
 # Get the context block with resonance
 resonant7 = mem5.resonate("Let's discuss honesty and facing ethical dilemmas")
@@ -290,11 +299,14 @@ target = make_old_reflection(
     "Programming languages like Python enable rapid prototyping and experimentation",
     "enthusiastic", 7, 40
 )
-mem6.add_self_reflection(target)
-# Pad with recent memories
-for i in range(12):
-    mem6.add_self_reflection(make_old_reflection(
-        f"Daily thought about nature and wildlife observation {i}",
+mem6.self_reflections.append(target)
+# Pad with recent distinct memories
+filler_topics6 = ["orchids", "glaciers", "volcanoes", "coral", "mushrooms",
+                  "deserts", "tundra", "wetlands", "forests", "savannas",
+                  "icebergs", "waterfalls"]
+for i, topic in enumerate(filler_topics6):
+    mem6.self_reflections.append(make_old_reflection(
+        f"Observed {topic} and marveled at their natural beauty",
         "calm", 8, i  # imp=8 to keep them all above old target in vividness
     ))
 

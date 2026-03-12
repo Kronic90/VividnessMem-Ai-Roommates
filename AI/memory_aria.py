@@ -20,6 +20,7 @@ Storage: JSON files under ai_dialogue_data/aria/
 """
 
 import json
+import math
 import os
 import re
 from datetime import datetime
@@ -77,10 +78,84 @@ BRIEF_FILE = DATA_DIR / "brief.json"
 BRIEF_INTERVAL = 3      # regenerate compressed brief every N sessions
 RESCORE_INTERVAL = 3    # re-evaluate importance scores every N sessions
 
+# ─── Mood-congruent recall ─────────────────────────────────────────────────
+# Mood dimensions: each ranges -1.0 (negative) to +1.0 (positive)
+# The mood state biases which memories feel "closer" — sad mood makes
+# melancholy memories more vivid, curious mood amplifies wonder, etc.
+MOOD_DIMENSIONS = ("valence", "arousal", "dominance")  # PAD model (simplified)
+MOOD_DECAY_RATE = 0.15     # how fast mood regresses toward neutral per turn
+MOOD_INFLUENCE = 0.12      # max vividness bonus/penalty from mood congruence
+MOOD_MEMORY_WEIGHT = 0.6   # how much surfaced memories influence mood (vs conversation)
+
+# Emotion → PAD vector mapping (valence, arousal, dominance)
+# These are approximate mappings from psychological literature
+EMOTION_VECTORS: dict[str, tuple[float, float, float]] = {
+    # Positive high-arousal
+    "excitement": (0.8, 0.8, 0.6), "joy": (0.9, 0.6, 0.5),
+    "wonder": (0.7, 0.6, 0.2), "curiosity": (0.5, 0.6, 0.3),
+    "pride": (0.8, 0.5, 0.8), "amusement": (0.7, 0.5, 0.4),
+    "fascination": (0.6, 0.7, 0.2), "delight": (0.9, 0.7, 0.5),
+    "enthusiasm": (0.8, 0.8, 0.6), "inspiration": (0.7, 0.7, 0.4),
+    # Positive low-arousal
+    "contentment": (0.7, -0.2, 0.4), "serenity": (0.6, -0.4, 0.3),
+    "warmth": (0.8, 0.1, 0.3), "affection": (0.8, 0.2, 0.3),
+    "gratitude": (0.7, 0.1, 0.2), "tenderness": (0.7, 0.0, 0.2),
+    "calm": (0.4, -0.5, 0.3), "peace": (0.5, -0.5, 0.4),
+    "comfort": (0.6, -0.3, 0.3), "trust": (0.6, 0.0, 0.3),
+    # Negative high-arousal
+    "frustration": (-0.6, 0.6, 0.3), "anger": (-0.7, 0.8, 0.7),
+    "anxiety": (-0.5, 0.7, -0.3), "fear": (-0.6, 0.8, -0.5),
+    "jealousy": (-0.5, 0.6, -0.2), "irritation": (-0.4, 0.5, 0.3),
+    "overwhelm": (-0.4, 0.7, -0.4), "tension": (-0.3, 0.6, 0.0),
+    # Negative low-arousal
+    "sadness": (-0.7, -0.3, -0.3), "melancholy": (-0.5, -0.3, -0.2),
+    "loneliness": (-0.6, -0.2, -0.4), "disappointment": (-0.5, -0.1, -0.2),
+    "regret": (-0.5, -0.1, -0.2), "nostalgia": (0.1, -0.2, -0.1),
+    "boredom": (-0.3, -0.6, -0.2), "weariness": (-0.3, -0.4, -0.3),
+    # Complex / ambivalent
+    "bittersweet": (0.1, 0.1, -0.1), "vulnerability": (-0.1, 0.2, -0.4),
+    "determination": (0.3, 0.6, 0.7), "resolve": (0.3, 0.4, 0.7),
+    "surprise": (0.2, 0.7, 0.0), "confusion": (-0.2, 0.4, -0.3),
+    "ambivalence": (0.0, 0.1, -0.2), "thoughtful": (0.3, -0.1, 0.2),
+    "reflective": (0.2, -0.2, 0.2), "protective": (0.3, 0.4, 0.6),
+}
+
+# ─── Spaced-repetition constants ──────────────────────────────────────────
+# Based on Ebbinghaus forgetting curve: R = e^(-t/S)
+# S (stability) grows when memories are accessed at spaced intervals
+INITIAL_STABILITY = 3.0    # days — how long a new memory stays vivid
+SPACING_BONUS = 1.8        # multiplier to stability per well-spaced access
+MIN_SPACING_DAYS = 0.5     # minimum gap between accesses to count as "spaced"
+
+# ─── Associative chain constants ──────────────────────────────────────────
+ASSOCIATION_HOPS = 2       # max graph traversal depth for associative recall
+ASSOCIATION_MIN_WEIGHT = 2 # minimum shared keywords for an edge
+
 
 def _ensure_dirs():
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     SOCIAL_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _emotion_to_vector(emotion_text: str) -> tuple[float, float, float] | None:
+    """Map an emotion string to a PAD (pleasure-arousal-dominance) vector.
+
+    Handles multi-word emotion tags by finding the best matching keyword.
+    Returns None if no match found.
+    """
+    if not emotion_text:
+        return None
+    words = emotion_text.lower().split()
+    # Direct match first
+    for word in words:
+        if word in EMOTION_VECTORS:
+            return EMOTION_VECTORS[word]
+    # Prefix match (handles "joyful" → "joy", "frustrated" → "frustration", etc.)
+    for word in words:
+        for key, vec in EMOTION_VECTORS.items():
+            if word.startswith(key[:4]) or key.startswith(word[:4]):
+                return vec
+    return None
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -111,10 +186,48 @@ class Reflection:
         # Organic decay: memories lose vividness over time
         # but high-importance ones resist fading
         self._access_count = 0
+        # Spaced-repetition: track when accesses happened for spacing quality
+        self._access_times: list[str] = []
+        self._stability: float = INITIAL_STABILITY  # days
 
     def touch(self):
-        """Mark this memory as accessed (keeps it vivid)."""
+        """Mark this memory as accessed (keeps it vivid).
+
+        If the access is well-spaced from the previous one, stability
+        increases — the memory becomes more resistant to decay over time.
+        This models the spacing effect from cognitive psychology.
+        """
+        now = datetime.now()
         self._access_count += 1
+
+        # Check if this access is well-spaced from the last one
+        if self._access_times:
+            last = datetime.fromisoformat(self._access_times[-1])
+            gap_days = (now - last).total_seconds() / 86400
+            if gap_days >= MIN_SPACING_DAYS:
+                # Well-spaced access — increase stability (memory becomes more durable)
+                self._stability = min(365.0, self._stability * SPACING_BONUS)
+        self._access_times.append(now.isoformat())
+        # Keep only last 20 access times to bound storage
+        if len(self._access_times) > 20:
+            self._access_times = self._access_times[-20:]
+
+    @property
+    def age_days(self) -> float:
+        """Days since this memory was created."""
+        return (datetime.now() - datetime.fromisoformat(self.timestamp)).total_seconds() / 86400
+
+    @property
+    def recency_score(self) -> float:
+        """Spaced-repetition recency: exponential decay modulated by stability.
+
+        R = e^(-t/S) where t = age in days, S = stability.
+        A brand-new memory has R ≈ 1.0.
+        A memory accessed at good intervals has high stability and decays slowly.
+        A memory never revisited decays with default stability (~3 days).
+        Scaled to 0-10 range to match the old linear system.
+        """
+        return 10.0 * math.exp(-self.age_days / max(0.1, self._stability))
 
     @property
     def vividness(self) -> float:
@@ -122,10 +235,38 @@ class Reflection:
         How 'present' this memory feels. Combines importance, recency, and access.
         Higher = more likely to surface in context.
         """
-        age_hours = (datetime.now() - datetime.fromisoformat(self.timestamp)).total_seconds() / 3600
-        recency_score = max(0, 10 - (age_hours / 24))  # loses 1 point per day
         access_bonus = min(3, self._access_count * 0.5)
-        return (self.importance * 0.6) + (recency_score * 0.3) + (access_bonus * 0.1)
+        return (self.importance * 0.6) + (self.recency_score * 0.3) + (access_bonus * 0.1)
+
+    def mood_adjusted_vividness(self, mood: dict[str, float]) -> float:
+        """Vividness score biased by current mood state.
+
+        Memories whose emotional tone is congruent with the current mood
+        feel slightly more vivid (easier to recall). Incongruent memories
+        feel slightly less vivid. This models mood-congruent recall from
+        cognitive psychology — when you're sad, sad memories come more easily.
+        """
+        base = self.vividness
+        if not mood or not self.emotion:
+            return base
+        mem_vec = _emotion_to_vector(self.emotion)
+        if not mem_vec:
+            return base
+        # Cosine-like similarity between mood and memory emotion
+        congruence = sum(mood.get(d, 0.0) * mem_vec[i]
+                         for i, d in enumerate(MOOD_DIMENSIONS))
+        # Normalize: congruence ranges roughly -1 to +1
+        norm = max(0.01, math.sqrt(sum(v**2 for v in mem_vec)))
+        mood_norm = max(0.01, math.sqrt(sum(mood.get(d, 0.0)**2
+                                            for d in MOOD_DIMENSIONS)))
+        congruence /= (norm * mood_norm)
+        # Apply as a gentle bias (±MOOD_INFLUENCE of base vividness)
+        return base * (1.0 + congruence * MOOD_INFLUENCE)
+
+    @property
+    def content_words(self) -> set[str]:
+        """Cached content words for association graph building."""
+        return _content_words(self.content)
 
     def to_dict(self) -> dict:
         d = {
@@ -135,7 +276,10 @@ class Reflection:
             "source": self.source,
             "timestamp": self.timestamp,
             "access_count": self._access_count,
+            "stability": round(self._stability, 2),
         }
+        if self._access_times:
+            d["access_times"] = self._access_times
         if self.why_saved:
             d["why_saved"] = self.why_saved
         if self.why_importance:
@@ -157,6 +301,8 @@ class Reflection:
             why_emotion=d.get("why_emotion", ""),
         )
         r._access_count = d.get("access_count", 0)
+        r._stability = d.get("stability", INITIAL_STABILITY)
+        r._access_times = d.get("access_times", [])
         return r
 
     def __repr__(self):
@@ -175,6 +321,14 @@ class AriaMemory:
     a memory has been revisited. The most vivid memories float to the top
     and get injected into context. Everything else fades into deep memory
     but can resurface if it becomes relevant again.
+
+    Enhanced with:
+    - Mood-congruent recall (mood biases which memories surface)
+    - Spaced-repetition decay (exponential forgetting with stability growth)
+    - Emotional reappraisal (emotions can evolve during rescore)
+    - Contradiction detection (conflicting memories flagged for resolution)
+    - Memory consolidation (between-session gist generation)
+    - Associative chains (2-hop graph traversal for deeper recall)
     """
 
     # How many reflections to inject into context
@@ -191,6 +345,9 @@ class AriaMemory:
         # ── Social Memory (per entity) ──
         self.social_impressions: dict[str, list[Reflection]] = {}
 
+        # ── Mood state (PAD model — regresses toward neutral) ──
+        self._mood: dict[str, float] = {d: 0.0 for d in MOOD_DIMENSIONS}
+
         # ── Compressed brief & session tracking ──
         self._brief_data: dict = {
             "session_count": 0,
@@ -198,6 +355,7 @@ class AriaMemory:
             "last_rescore_session": 0,
             "self_brief": "",
             "entity_briefs": {},
+            "mood": {d: 0.0 for d in MOOD_DIMENSIONS},
         }
 
         self._load()
@@ -237,24 +395,363 @@ class AriaMemory:
                 return
         self.social_impressions[entity].append(reflection)
 
-    # ─── Surface Memories (by vividness) ──────────────────────────────
+    # ─── Surface Memories (by vividness, mood-adjusted) ─────────────
 
     def get_active_self(self) -> list[Reflection]:
-        """Return the most vivid self-reflections for context injection."""
-        sorted_refs = sorted(self.self_reflections, key=lambda r: r.vividness, reverse=True)
+        """Return the most vivid self-reflections for context injection.
+
+        Uses mood-congruent recall: memories whose emotional tone matches
+        the current mood state feel slightly more vivid and surface more readily.
+        """
+        sorted_refs = sorted(
+            self.self_reflections,
+            key=lambda r: r.mood_adjusted_vividness(self._mood),
+            reverse=True,
+        )
         active = sorted_refs[:self.ACTIVE_SELF_LIMIT]
         for r in active:
             r.touch()  # accessing makes it more vivid
+        # Update mood based on what surfaced
+        self._absorb_mood_from_memories(active, weight=0.3)
         return active
 
     def get_active_social(self, entity: str) -> list[Reflection]:
         """Return the most vivid impressions of a specific entity."""
         entries = self.social_impressions.get(entity, [])
-        sorted_entries = sorted(entries, key=lambda r: r.vividness, reverse=True)
+        sorted_entries = sorted(
+            entries,
+            key=lambda r: r.mood_adjusted_vividness(self._mood),
+            reverse=True,
+        )
         active = sorted_entries[:self.ACTIVE_SOCIAL_LIMIT]
         for r in active:
             r.touch()
         return active
+
+    # ─── Mood State ───────────────────────────────────────────────────
+
+    @property
+    def mood(self) -> dict[str, float]:
+        """Current mood state (read-only copy)."""
+        return dict(self._mood)
+
+    @property
+    def mood_label(self) -> str:
+        """Human-readable label for the current mood state."""
+        if not any(abs(v) > 0.15 for v in self._mood.values()):
+            return "neutral"
+        # Find closest emotion vector
+        best_label, best_sim = "neutral", -1.0
+        for label, vec in EMOTION_VECTORS.items():
+            sim = sum(self._mood.get(d, 0.0) * vec[i]
+                      for i, d in enumerate(MOOD_DIMENSIONS))
+            if sim > best_sim:
+                best_sim, best_label = sim, label
+        return best_label
+
+    def update_mood_from_conversation(self, text: str):
+        """Shift mood based on emotional content of conversation text.
+
+        Called during the conversation loop to let the conversation's
+        emotional tone gradually influence which memories feel most vivid.
+        Mood always decays toward neutral to prevent runaway feedback loops.
+        """
+        # Decay toward neutral first
+        for d in MOOD_DIMENSIONS:
+            self._mood[d] *= (1.0 - MOOD_DECAY_RATE)
+
+        # Detect emotions in conversation text
+        text_lower = text.lower()
+        detected_vecs: list[tuple[float, float, float]] = []
+        for word in re.findall(r"\b[a-zA-Z]{3,}\b", text_lower):
+            vec = _emotion_to_vector(word)
+            if vec:
+                detected_vecs.append(vec)
+
+        if not detected_vecs:
+            return
+
+        # Average the detected emotion vectors and nudge mood
+        nudge_strength = min(0.3, 0.1 * len(detected_vecs))  # cap influence
+        for i, d in enumerate(MOOD_DIMENSIONS):
+            avg = sum(v[i] for v in detected_vecs) / len(detected_vecs)
+            self._mood[d] = max(-1.0, min(1.0,
+                self._mood[d] + avg * nudge_strength))
+
+    def _absorb_mood_from_memories(self, memories: list[Reflection],
+                                    weight: float = 0.3):
+        """Let surfaced memories subtly push the mood toward their emotional tone.
+
+        This creates the feedback loop that makes mood-congruent recall
+        self-reinforcing (but bounded by MOOD_DECAY_RATE regression to neutral).
+        """
+        vecs: list[tuple[float, float, float]] = []
+        for m in memories:
+            vec = _emotion_to_vector(m.emotion)
+            if vec:
+                vecs.append(vec)
+        if not vecs:
+            return
+        for i, d in enumerate(MOOD_DIMENSIONS):
+            avg = sum(v[i] for v in vecs) / len(vecs)
+            self._mood[d] = max(-1.0, min(1.0,
+                self._mood[d] + avg * weight * MOOD_MEMORY_WEIGHT))
+
+    def _save_mood(self):
+        """Persist mood state in the brief file."""
+        self._brief_data["mood"] = dict(self._mood)
+
+    def _load_mood(self):
+        """Restore mood state from brief file."""
+        saved = self._brief_data.get("mood", {})
+        for d in MOOD_DIMENSIONS:
+            self._mood[d] = float(saved.get(d, 0.0))
+
+    # ─── Associative Chains (memory graph) ────────────────────────────
+
+    def _build_association_edges(self) -> dict[int, list[tuple[int, int]]]:
+        """Build an adjacency list of memory associations.
+
+        Two memories are linked if they share >= ASSOCIATION_MIN_WEIGHT
+        content words. The weight is the number of shared words.
+        Returns {memory_index: [(neighbor_index, weight), ...]}.
+        """
+        n = len(self.self_reflections)
+        if n < 2:
+            return {}
+
+        # Precompute content words
+        word_sets = [_content_words(r.content) for r in self.self_reflections]
+        edges: dict[int, list[tuple[int, int]]] = {i: [] for i in range(n)}
+
+        for i in range(n):
+            for j in range(i + 1, n):
+                shared = len(word_sets[i] & word_sets[j])
+                if shared >= ASSOCIATION_MIN_WEIGHT:
+                    edges[i].append((j, shared))
+                    edges[j].append((i, shared))
+        return edges
+
+    def associate(self, seed_indices: list[int],
+                  hops: int = ASSOCIATION_HOPS) -> list[Reflection]:
+        """Walk the association graph from seed memories.
+
+        Returns memories reachable within `hops` that aren't in the seed set.
+        Prioritizes paths through high-weight edges (more shared concepts).
+        """
+        if not seed_indices or not self.self_reflections:
+            return []
+
+        edges = self._build_association_edges()
+        visited = set(seed_indices)
+        frontier = set(seed_indices)
+        found: list[tuple[float, int]] = []
+
+        for hop in range(hops):
+            next_frontier: set[int] = set()
+            for idx in frontier:
+                for neighbor, weight in edges.get(idx, []):
+                    if neighbor not in visited:
+                        visited.add(neighbor)
+                        next_frontier.add(neighbor)
+                        # Score: closer hops and heavier edges rank higher
+                        score = weight / (hop + 1)
+                        found.append((score, neighbor))
+            frontier = next_frontier
+
+        found.sort(key=lambda x: x[0], reverse=True)
+        return [self.self_reflections[idx] for _, idx in found[:self.RESONANCE_LIMIT]]
+
+    # ─── Contradiction Detection ──────────────────────────────────────
+
+    def detect_contradictions(self, limit: int = 5) -> list[tuple[Reflection, Reflection]]:
+        """Find pairs of memories that may contradict each other.
+
+        Looks for memories that share enough context (entity, topic words)
+        but have opposing emotional valence or contain negation patterns
+        relative to each other.
+
+        Returns list of (older_memory, newer_memory) pairs.
+        """
+        if len(self.self_reflections) < 2:
+            return []
+
+        contradictions: list[tuple[float, Reflection, Reflection]] = []
+        n = len(self.self_reflections)
+
+        for i in range(n):
+            for j in range(i + 1, n):
+                a, b = self.self_reflections[i], self.self_reflections[j]
+                score = self._contradiction_score(a, b)
+                if score > 0.5:
+                    # Order by timestamp (older first)
+                    if a.timestamp <= b.timestamp:
+                        contradictions.append((score, a, b))
+                    else:
+                        contradictions.append((score, b, a))
+
+        contradictions.sort(key=lambda x: x[0], reverse=True)
+        return [(a, b) for _, a, b in contradictions[:limit]]
+
+    @staticmethod
+    def _contradiction_score(a: Reflection, b: Reflection) -> float:
+        """Score how likely two memories contradict each other.
+
+        Considers: topic overlap (must be about the same thing),
+        emotional divergence, and negation patterns.
+        """
+        # They must be about the same topic (min 30% word overlap)
+        words_a = _content_words(a.content)
+        words_b = _content_words(b.content)
+        topic_overlap = _overlap_ratio(words_a, words_b)
+        if topic_overlap < 0.15:
+            return 0.0  # different topics — not a contradiction
+
+        score = 0.0
+
+        # Emotional divergence on same topic
+        vec_a = _emotion_to_vector(a.emotion)
+        vec_b = _emotion_to_vector(b.emotion)
+        if vec_a and vec_b:
+            # Check if valence (pleasure dimension) flipped
+            valence_diff = abs(vec_a[0] - vec_b[0])
+            if valence_diff > 0.8:
+                score += 0.4  # strong emotional reversal on same topic
+
+        # Important: both must be somewhat important (trivial contradictions don't matter)
+        if min(a.importance, b.importance) < 3:
+            return 0.0
+
+        # Negation patterns — one says X, the other says "not X" or opposite
+        _NEG = {"not", "no", "never", "don't", "doesn't", "isn't", "wasn't",
+                "wouldn't", "couldn't", "can't", "won't", "hardly", "barely"}
+        a_has_neg = bool(_NEG & set(a.content.lower().split()))
+        b_has_neg = bool(_NEG & set(b.content.lower().split()))
+        if a_has_neg != b_has_neg and topic_overlap > 0.25:
+            score += 0.4  # one negates what the other affirms
+
+        # Topic overlap amplifies the contradiction
+        score *= (0.5 + topic_overlap)
+
+        return min(1.0, score)
+
+    def get_contradiction_context(self) -> str:
+        """Generate a context block flagging detected contradictions.
+
+        Injected during rescore so Aria can resolve them.
+        """
+        pairs = self.detect_contradictions(limit=3)
+        if not pairs:
+            return ""
+        lines = ["=== POSSIBLE CONTRADICTIONS IN MY MEMORIES ===",
+                 "(These memories seem to conflict — consider which still reflects how I feel)"]
+        for older, newer in pairs:
+            lines.append(f"  Earlier: \"{older.content}\" ({older.emotion})")
+            lines.append(f"  Later:   \"{newer.content}\" ({newer.emotion})")
+            lines.append("")
+        return "\n".join(lines)
+
+    # ─── Memory Consolidation ("sleep") ───────────────────────────────
+
+    def find_consolidation_clusters(self, min_cluster: int = 3,
+                                     max_clusters: int = 3) -> list[list[Reflection]]:
+        """Find groups of related memories that could be consolidated into gist memories.
+
+        Looks for clusters of 3+ memories that share significant keyword overlap
+        but aren't dedup-close (they're related but distinct experiences).
+        These represent themes that could be compressed into synthesized understanding.
+        """
+        if len(self.self_reflections) < min_cluster:
+            return []
+
+        # Build adjacency for moderate overlap (0.25-0.75 Jaccard — related but distinct)
+        n = len(self.self_reflections)
+        word_sets = [_content_words(r.content) for r in self.self_reflections]
+        adjacency: dict[int, set[int]] = {i: set() for i in range(n)}
+
+        for i in range(n):
+            for j in range(i + 1, n):
+                overlap = _overlap_ratio(word_sets[i], word_sets[j])
+                if 0.25 <= overlap < _DEDUP_THRESHOLD:
+                    adjacency[i].add(j)
+                    adjacency[j].add(i)
+
+        # Greedy cluster extraction
+        used: set[int] = set()
+        clusters: list[list[Reflection]] = []
+
+        # Start from most-connected nodes
+        by_degree = sorted(range(n), key=lambda i: len(adjacency[i]), reverse=True)
+        for seed in by_degree:
+            if seed in used or len(adjacency[seed]) < min_cluster - 1:
+                continue
+            # BFS to find cluster
+            cluster_ids = {seed}
+            frontier = {seed}
+            while frontier:
+                node = frontier.pop()
+                for neighbor in adjacency[node]:
+                    if neighbor not in used and neighbor not in cluster_ids:
+                        cluster_ids.add(neighbor)
+                        frontier.add(neighbor)
+            if len(cluster_ids) >= min_cluster:
+                clusters.append([self.self_reflections[i] for i in sorted(cluster_ids)])
+                used |= cluster_ids
+            if len(clusters) >= max_clusters:
+                break
+
+        return clusters
+
+    def prepare_consolidation_prompt(self) -> str:
+        """Build the prompt for between-session memory consolidation.
+
+        Returns empty string if no consolidation needed.
+        """
+        clusters = self.find_consolidation_clusters()
+        if not clusters:
+            return ""
+
+        cluster_blocks = []
+        for i, cluster in enumerate(clusters):
+            mem_lines = []
+            for m in cluster:
+                tag = f" ({m.emotion})" if m.emotion else ""
+                mem_lines.append(f"  - {m.content}{tag}")
+            cluster_blocks.append(
+                f"CLUSTER {i + 1} ({len(cluster)} related memories):\n"
+                + "\n".join(mem_lines)
+            )
+
+        return CONSOLIDATION_PROMPT.format(
+            clusters="\n\n".join(cluster_blocks))
+
+    def apply_consolidation(self, gists: list[dict]):
+        """Store consolidation gists as new synthetic memories.
+
+        Gists are bridge memories that connect clusters of related experiences
+        into coherent understanding. They're marked with source='consolidation'
+        so they can be tracked.
+        """
+        for g in gists:
+            content = g.get("gist", "").strip()
+            if not content or len(content) < 20:
+                continue
+            # Check for dedup against existing memories
+            new_words = _content_words(content)
+            is_dup = False
+            for existing in self.self_reflections:
+                if _overlap_ratio(new_words, _content_words(existing.content)) >= _DEDUP_THRESHOLD:
+                    is_dup = True
+                    break
+            if is_dup:
+                continue
+            self.self_reflections.append(Reflection(
+                content=content,
+                emotion=g.get("emotion", "understanding"),
+                importance=g.get("importance", 6),
+                source="consolidation",
+                why_saved="Synthesized from related experiences during memory consolidation",
+            ))
 
     # ─── Resonance (old memories resurfacing) ─────────────────────────
 
@@ -266,6 +763,9 @@ class AriaMemory:
         get a .touch() boost, potentially pulling them back into the active
         set over time — like suddenly remembering something from months ago
         because the conversation triggered it.
+
+        After finding keyword-resonant memories, walks the association graph
+        to find memories connected by shared concepts (associative chains).
 
         Returns only memories that are NOT already in the active set.
         """
@@ -283,7 +783,9 @@ class AriaMemory:
         # Get current active set IDs so we don't duplicate
         active_set = set(
             id(r) for r in sorted(
-                self.self_reflections, key=lambda r: r.vividness, reverse=True
+                self.self_reflections,
+                key=lambda r: r.mood_adjusted_vividness(self._mood),
+                reverse=True,
             )[:self.ACTIVE_SELF_LIMIT]
         )
 
@@ -291,7 +793,8 @@ class AriaMemory:
         # Use prefix matching (first 5 chars) to handle plurals/conjugations
         context_prefixes = {w[:5] for w in context_words if len(w) >= 5}
         scored: list[tuple[float, Reflection]] = []
-        for ref in self.self_reflections:
+        seed_indices: list[int] = []  # for associative chain expansion
+        for idx, ref in enumerate(self.self_reflections):
             if id(ref) in active_set:
                 continue  # already surfaced normally
             mem_text = f"{ref.content} {ref.emotion}".lower()
@@ -305,9 +808,26 @@ class AriaMemory:
                 # Score: overlap count + importance bonus
                 score = total_overlap + (ref.importance * 0.2)
                 scored.append((score, ref))
+                seed_indices.append(idx)
 
         scored.sort(key=lambda x: x[0], reverse=True)
         resonant = [ref for _, ref in scored[:n]]
+
+        # Associative chain expansion: walk the memory graph from seed memories
+        # to find conceptually connected memories that didn't match keywords.
+        # Only include associated memories that have at least 1 context-word match
+        # to prevent completely off-topic associations from leaking through.
+        if seed_indices:
+            associated = self.associate(seed_indices[:5], hops=ASSOCIATION_HOPS)
+            resonant_ids = {id(r) for r in resonant} | active_set
+            for a in associated:
+                if id(a) not in resonant_ids and len(resonant) < n + 3:
+                    a_words = set(re.findall(r"\b[a-zA-Z]{4,}\b",
+                                             f"{a.content} {a.emotion}".lower()))
+                    a_prefixes = {w[:5] for w in a_words if len(w) >= 5}
+                    if (context_words & a_words) or (context_prefixes & a_prefixes):
+                        resonant.append(a)
+                        resonant_ids.add(id(a))
 
         # Touch resonant memories — they're being remembered
         for r in resonant:
@@ -323,8 +843,15 @@ class AriaMemory:
         Written in first person, like reading from a journal.
         Includes compressed brief (if available) before individual memories.
         Optionally includes resonant memories (old ones triggered by context).
+        Now also includes a subtle mood indicator and contradiction flags.
         """
         lines = []
+
+        # Mood indicator — subtle, first-person
+        mood_label = self.mood_label
+        if mood_label != "neutral":
+            lines.append(f"(Right now I'm feeling somewhat {mood_label}.)")
+            lines.append("")
 
         # Compressed understanding (updated periodically)
         self_brief = self._brief_data.get("self_brief", "")
@@ -361,6 +888,12 @@ class AriaMemory:
             for r in resonant:
                 emotion_tag = f" ({r.emotion})" if r.emotion else ""
                 lines.append(f"— {r.content}{emotion_tag}")
+            lines.append("")
+
+        # Contradiction flags — let Aria know about conflicting memories
+        contradiction_ctx = self.get_contradiction_context()
+        if contradiction_ctx:
+            lines.append(contradiction_ctx)
             lines.append("")
 
         return "\n".join(lines) if lines else ""
@@ -421,7 +954,7 @@ class AriaMemory:
     # ─── Brief & Maintenance ──────────────────────────────────────────
 
     def _load_brief(self):
-        """Load compressed brief and session counter from disk."""
+        """Load compressed brief, session counter, and mood state from disk."""
         if BRIEF_FILE.exists():
             try:
                 with open(BRIEF_FILE, "r", encoding="utf-8") as f:
@@ -430,10 +963,13 @@ class AriaMemory:
                     self._brief_data.update(data)
             except (json.JSONDecodeError, KeyError, TypeError):
                 pass  # keep defaults
+        # Restore mood state
+        self._load_mood()
 
     def _save_brief(self):
-        """Save compressed brief and session counter to disk."""
+        """Save compressed brief, session counter, and mood state to disk."""
         _ensure_dirs()
+        self._save_mood()  # persist mood into brief data before writing
         with open(BRIEF_FILE, "w", encoding="utf-8") as f:
             json.dump(self._brief_data, f, indent=2, ensure_ascii=False)
 
@@ -548,7 +1084,11 @@ class AriaMemory:
 
     def apply_rescores(self, adjustments: list[dict],
                        indexed_memories: list["Reflection"]):
-        """Apply importance re-scoring. Enforces +/-2 cap per memory."""
+        """Apply importance re-scoring and emotional reappraisal.
+
+        Enforces +/-2 cap per memory for importance.
+        Also applies emotion tag updates when the LLM recommends reappraisal.
+        """
         for adj in adjustments:
             idx = adj.get("index")
             new_imp = adj.get("new_importance")
@@ -561,6 +1101,12 @@ class AriaMemory:
             # Enforce conservative ±2 adjustment
             clamped = max(ref.importance - 2, min(ref.importance + 2, new_imp))
             ref.importance = clamped
+            # Emotional reappraisal — update emotion if LLM suggests it
+            new_emotion = adj.get("new_emotion")
+            if new_emotion and isinstance(new_emotion, str):
+                new_emotion = new_emotion.strip()[:50]  # sanitize
+                if new_emotion:
+                    ref.emotion = new_emotion
         self._brief_data["last_rescore_session"] = self._brief_data.get("session_count", 0)
 
 
@@ -685,6 +1231,12 @@ Look for:
 - Patterns that seemed minor at the time but now look significant
 - One-time reactions rated high that never came up again
 
+EMOTIONAL REAPPRAISAL:
+Also consider whether the original emotion tag still feels right. People's
+feelings about memories can shift — initial anger may soften into understanding,
+or something that felt neutral may come to feel bittersweet. If an emotion
+tag should change, include "new_emotion" in that entry.
+
 MEMORIES:
 {memories}
 
@@ -694,11 +1246,34 @@ Maximum adjustment: +/-2 from the original score. Be conservative.
 ```json
 [
   {{"index": 0, "new_importance": 7, "reason": "keeps coming up in conversation"}},
-  {{"index": 5, "new_importance": 3, "reason": "seemed important but never relevant again"}}
+  {{"index": 5, "new_importance": 3, "new_emotion": "bittersweet", "reason": "seemed important but grew into something more complex"}}
 ]
 ```
 
 Return ONLY the JSON array. Return [] if no changes needed."""
+
+CONSOLIDATION_PROMPT = """You are consolidating your memories. Below are clusters of related
+memories that share themes or topics. For each cluster, write a single
+bridging "gist" memory that captures the essence of what these experiences
+mean to you together — like waking up and realising what a series of
+events actually adds up to.
+
+The gist should:
+- Synthesize, not just summarize — what do these memories MEAN as a group?
+- Be written naturally in first person, like a journal insight
+- Include an emotion that reflects how this synthesized understanding feels
+- Rate importance 4-8 (gists are moderately important — they're understanding, not raw experience)
+
+{clusters}
+
+Return a JSON array of gist memories:
+```json
+[
+  {{"gist": "Looking back at all those conversations about creativity...", "emotion": "appreciative", "importance": 6}}
+]
+```
+
+Return ONLY the JSON array. Return [] if no clusters warrant consolidation."""
 
 
 def parse_brief_response(response: str) -> dict:
