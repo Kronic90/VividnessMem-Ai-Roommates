@@ -4,7 +4,7 @@ Two local LLMs sharing a living space — talking freely, building projects, and
 
 ## Overview
 
-This project implements and validates an **organic, vividness-based memory system** that gives AI agents genuine persistence without relying on RAG, embeddings, or vector search. Memories decay naturally over time, but emotionally significant or frequently accessed ones resist fading — structurally modelling how human episodic memory works.
+This project implements and validates an **organic, vividness-based memory system** that gives AI agents genuine persistence without relying on RAG, embeddings, or vector search. Memories decay naturally over time, but emotionally significant or frequently accessed ones resist fading — inspired by episodic-memory principles, implemented as a testable software memory policy.
 
 To stress-test this approach, two AI agents with different memory architectures run side by side in the same environment:
 
@@ -13,9 +13,9 @@ To stress-test this approach, two AI agents with different memory architectures 
 
 Both agents talk autonomously, curate their own memories, and maintain persistent identities across sessions.
 
-## Verified: 92 Tests, 0 Failures
+## Verified: 161 Tests, 0 Failures
 
-The organic memory system has been rigorously tested across two suites covering both mechanical correctness and behavioral proof-of-life. All test code and results are in the repository for review.
+The organic memory system has been rigorously tested across three suites covering mechanical correctness, behavioral proof-of-life, and the compressed-brief / retrospective-rescore lifecycle. All test code and results are in the repository for review.
 
 ### Robustness Suite — 63/63 passing
 
@@ -49,6 +49,18 @@ Proves the system works end-to-end across simulated process restarts — the "do
 | **Multi-Session Drift** | 5 sessions of accumulation: all memories persist, narrative arc (melancholy → challenge → growth) intact |
 | **Identity Continuity** | Aria's self-model (personality traits, relationships, growth) survives 3 full restarts |
 
+### Brief & Rescore Suite — 69/69 passing
+
+Verifies the compressed-brief and retrospective-rescore lifecycle.
+
+| Test | What it proves |
+|---|---|
+| **Brief Generation** | After N sessions, the AI produces a compressed self-understanding and entity briefs |
+| **Brief Context Injection** | Compressed briefs appear in the context block above individual memories |
+| **Rescore Lifecycle** | Importance scores are re-evaluated periodically with a ±2 cap per cycle |
+| **Session Tracking** | Session counter persists correctly and triggers briefs/rescores at the right intervals |
+| **Full Cycle** | End-to-end: sessions accumulate → brief fires → rescore fires → context reflects updates |
+
 ### Test Files
 
 All test code and results are in the [`tests/`](tests/) directory:
@@ -59,6 +71,7 @@ All test code and results are in the [`tests/`](tests/) directory:
 | `test_memory_robustness_results.txt` | Full output from last run |
 | `test_behavioral_integration.py` | Behavioral suite source (29 assertions) |
 | `test_behavioral_integration_results.txt` | Full output from last run |
+| `test_brief_rescore.py` | Brief & rescore suite source (69 assertions) |
 | `test_organic_memory.py` | Core unit tests (27 assertions) |
 | `test_resonance.py` | Resonance mechanism tests (17 assertions) |
 | `test_task_learning.py` | Task memory tests against live data (31 assertions) |
@@ -98,6 +111,28 @@ When a new memory is added, it's compared against existing memories using Jaccar
 - Access count is boosted (the AI thought about this again)
 
 This prevents repetitive reflections from consuming active slots while reinforcing genuinely recurring themes.
+
+### Compressed Briefs
+
+Every few sessions, Aria reads all her memories and writes a **compressed self-understanding** (~2K characters) — a brief that captures her evolving sense of self, her relationships, and her interests. Entity-specific briefs are generated for each person/AI she knows. These briefs are injected at the top of her context block, above individual memories, giving her a stable narrative identity even as individual memories decay.
+
+The brief is written by Aria herself, not programmatically summarised. This means her compressed understanding reflects her own interpretive lens, not a mechanical reduction.
+
+### Retrospective Re-scoring
+
+Every few sessions, Aria re-evaluates the importance of her existing memories in light of everything she now knows. Importance scores can shift by ±2 per cycle, allowing early memories that turned out to be foundational to gain significance, and memories that seemed important but led nowhere to fade.
+
+This addresses the "static importance" problem — where a memory's importance is frozen at the moment of creation and never revisited.
+
+### Metacognitive Rationale
+
+Each memory stores not just *what* was remembered, but *why*:
+
+- **`why_saved`** — why Aria chose to remember this at all
+- **`why_importance`** — why she rated it at this importance level
+- **`why_emotion`** — why she tagged it with this emotion
+
+These fields are written by the AI during curation and serve two purposes: they improve consistency in future curation decisions, and they provide an auditable trace of the AI's reasoning about its own memory.
 
 ### Unlimited Storage, Bounded Context
 
@@ -145,6 +180,9 @@ tests/              Full test suites with results
 - **Organic memory with vividness decay** — memories fade naturally; important/emotional ones persist
 - **Soft deduplication** — near-duplicate memories merge instead of stacking
 - **Associative resonance** — old memories resurface when conversation triggers keyword overlap
+- **Compressed briefs** — periodic AI-written self-understanding that sits above individual memories
+- **Retrospective re-scoring** — importance scores are re-evaluated every few sessions, not frozen at creation
+- **Metacognitive rationale** — each memory records *why* it was saved, rated, and emotionally tagged
 - **Asymmetric dual-LLM design** — two different models, backends, and capabilities
 - **AI-controlled memory curation** — they decide what to remember and how to describe it
 - **Session recaps** — AI-generated summaries for natural session continuity
@@ -207,6 +245,7 @@ All test results are committed to the repo so you can see exactly what was teste
 - **Resonance is prefix-based, not semantic** — "quantum entanglement" finds "quantum" but won't find "particle physics." Associative recall only fires on literal word overlap.
 - **No concurrent access** — single-threaded file I/O. Multiple processes hitting the same memory files would race.
 - **Scale ceiling untested beyond 1,001** — performance is excellent at 1K memories but months of daily use could push 5–10K+. The O(n) sort should still be fast but is unverified at that scale.
+- **Metacognitive rationale can canonise bad interpretations** — if Aria misinterprets why a memory matters, the stored rationale may reinforce that misinterpretation in future curation. Retrospective re-scoring partially mitigates this but doesn't fully solve it.
 
 ## License
 

@@ -54,6 +54,7 @@ from task_memory import AriaTaskMemory, RexTaskMemory, TaskEntry, parse_task_mem
 GEMMA_PATH = r"D:\AiStuff\google_gemma-3-12b-it-Q4_K_M.gguf"           # Change to your actual path or huggingface ID
 GEMMA_MMPROJ = r"D:\AiStuff\mmproj-google_gemma-3-12b-it-f16.gguf"      # Change to your actual path or huggingface ID for the vision module
 QWEN_HF_ID = "Qwen/Qwen3.5-4B"   # downloaded & cached by HuggingFace on first run
+QWEN_MAX_INPUT_TOKENS = 6144     # keep input well under Qwen's 32K to avoid OOM on 16GB
 
 # ─── Default system prompts (identity seeds) ──────────────────────────────
 GEMMA_SYSTEM = """YOUR NAME IS ARIA. You are Aria — remember this. You are NOT Rex.
@@ -205,7 +206,7 @@ Example of good workflow:
 EXAMPLE — this is literally how you run code (this format is required):
 
 ```python
-cities = load_json("Aetheria/cities.json") if file_exists("Aetheria/cities.json") else {"cities": []}
+cities = load_json("MyProject/cities.json") if file_exists("MyProject/cities.json") else {"cities": []}
 result = f"Found {len(cities['cities'])} cities"
 ```
 
@@ -302,7 +303,7 @@ class Signals(QObject):
 #  Conversation engine (runs in a background thread)
 # ═══════════════════════════════════════════════════════════════════════════
 class ConversationEngine:
-    def __init__(self, signals: Signals, gpu_layers: int = 40, ctx_size: int = 65536):
+    def __init__(self, signals: Signals, gpu_layers: int = 40, ctx_size: int = 16192):
         self.signals = signals
         self.gpu_layers = gpu_layers
         self.ctx_size = ctx_size
@@ -464,14 +465,54 @@ class ConversationEngine:
             # transformers path (Qwen)
             return self._generate_transformers(model, history)
 
+    def _trim_history_for_qwen(self, history: list[dict]) -> list[dict]:
+        """Keep system prompt + recent turns within QWEN_MAX_INPUT_TOKENS.
+
+        Drops the oldest conversation turns (keeping the system message)
+        until the token count fits.  This prevents OOM from the KV cache
+        growing with every turn on a 16 GB GPU.
+        """
+        if not history:
+            return history
+
+        # Quick token count via the processor's tokenizer
+        def _count_tokens(msgs: list[dict]) -> int:
+            text = self.phi_processor.apply_chat_template(
+                msgs, tokenize=False, add_generation_prompt=True,
+                enable_thinking=False,
+            )
+            return len(self.phi_processor.tokenizer.encode(text))
+
+        # Fast path: if it already fits, return as-is
+        total = _count_tokens(history)
+        if total <= QWEN_MAX_INPUT_TOKENS:
+            return history
+
+        # Separate system message from conversation
+        system_msgs = [m for m in history if m["role"] == "system"]
+        convo_msgs = [m for m in history if m["role"] != "system"]
+
+        # Drop oldest pairs of (user, assistant) until it fits
+        while convo_msgs and _count_tokens(system_msgs + convo_msgs) > QWEN_MAX_INPUT_TOKENS:
+            dropped = convo_msgs.pop(0)
+            print(f"[QWEN-TRIM] Dropped {dropped['role']} message ({len(str(dropped.get('content', '')))}"
+                  f" chars) to fit VRAM budget")
+
+        print(f"[QWEN-TRIM] Kept {len(convo_msgs)} conversation messages "
+              f"(~{_count_tokens(system_msgs + convo_msgs)} tokens)")
+        return system_msgs + convo_msgs
+
     def _generate_transformers(self, model, history: list[dict]) -> str:
         """Generate using a HuggingFace transformers model (Qwen3.5-4B with vision)."""
         import torch
         from PIL import Image as PILImage
 
+        # ── Trim history to fit VRAM budget ──
+        trimmed = self._trim_history_for_qwen(history)
+
         # Extract PIL images from multimodal message content
         images = []
-        for msg in history:
+        for msg in trimmed:
             content = msg.get("content", "")
             if isinstance(content, list):
                 for part in content:
@@ -486,7 +527,7 @@ class ConversationEngine:
                             print(f"[VISION] Failed to load image {img_val}: {e}")
 
         text = self.phi_processor.apply_chat_template(
-            history, tokenize=False, add_generation_prompt=True,
+            trimmed, tokenize=False, add_generation_prompt=True,
             enable_thinking=False,
         )
 
@@ -499,10 +540,13 @@ class ConversationEngine:
                 text=[text], return_tensors="pt",
             ).to(model.device)
 
+        input_len = inputs["input_ids"].shape[1]
+        print(f"[QWEN] Input tokens: {input_len}")
+
         with torch.no_grad():
             output_ids = model.generate(
                 **inputs,
-                max_new_tokens=2048,
+                max_new_tokens=min(2048, QWEN_MAX_INPUT_TOKENS - input_len + 2048),
                 temperature=0.8,
                 top_p=0.95,
                 repetition_penalty=1.1,
@@ -510,10 +554,12 @@ class ConversationEngine:
                 use_cache=True,
             )
         # Decode only the newly generated tokens
-        new_tokens = output_ids[0][inputs["input_ids"].shape[1]:]
+        new_tokens = output_ids[0][input_len:]
 
-        # Free GPU memory after generation to prevent OOM buildup
+        # Aggressively free GPU memory after generation
         del output_ids, inputs
+        import gc
+        gc.collect()
         torch.cuda.empty_cache()
         decoded = self.phi_processor.decode(new_tokens, skip_special_tokens=True).strip()
 

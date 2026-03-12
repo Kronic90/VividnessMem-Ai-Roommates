@@ -263,7 +263,7 @@ class AriaTaskMemory:
         "code":       {"code", "script", "python", "calculate", "simulate", "algorithm", "function"},
         "simulation": {"simulate", "simulation", "model", "parameters", "variables", "test"},
         "analysis":   {"analyze", "analyse", "compare", "evaluate", "measure", "results"},
-        "worldbuild": {"lore", "world", "society", "faction", "aetheria", "culture", "narrative"},
+        "worldbuild": {"lore", "world", "society", "faction", "culture", "narrative"},
     }
 
     def recall(self, context: str, limit: int = 3) -> list[TaskEntry]:

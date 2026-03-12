@@ -36,6 +36,30 @@ from datetime import datetime
 from itertools import combinations, permutations, product
 from pathlib import Path
 
+# Additional safe modules for the sandbox
+import string as _string_mod
+import textwrap as _textwrap_mod
+import copy as _copy_mod
+import functools as _functools_mod
+import operator as _operator_mod
+import decimal as _decimal_mod
+import fractions as _fractions_mod
+import csv as _csv_mod
+import hashlib as _hashlib_mod
+import uuid as _uuid_mod
+import pprint as _pprint_mod
+import bisect as _bisect_mod
+import heapq as _heapq_mod
+import array as _array_mod
+import struct as _struct_mod
+import base64 as _base64_mod
+import difflib as _difflib_mod
+import colorsys as _colorsys_mod
+import cmath as _cmath_mod
+import dataclasses as _dataclasses_mod
+import enum as _enum_mod
+import typing as _typing_mod
+
 import matplotlib
 matplotlib.use("Agg")  # headless — no GUI needed
 import matplotlib.pyplot as plt
@@ -225,17 +249,46 @@ import collections as _collections_mod
 import numpy as _numpy_mod
 import pathlib as _pathlib_mod
 _IMPORTABLE_MODULES = {
+    # Core math / science
     "math": math,
+    "cmath": _cmath_mod,
     "random": random,
     "statistics": statistics,
+    "decimal": _decimal_mod,
+    "fractions": _fractions_mod,
+    # Data structures / functional
     "json": json,
-    "itertools": _itertools_mod,
+    "csv": _csv_mod,
     "collections": _collections_mod,
+    "itertools": _itertools_mod,
+    "functools": _functools_mod,
+    "operator": _operator_mod,
+    "dataclasses": _dataclasses_mod,
+    "enum": _enum_mod,
+    "typing": _typing_mod,
+    "copy": _copy_mod,
+    # Text processing
+    "re": re,
+    "string": _string_mod,
+    "textwrap": _textwrap_mod,
+    "difflib": _difflib_mod,
+    "pprint": _pprint_mod,
+    # Algorithms / data
+    "bisect": _bisect_mod,
+    "heapq": _heapq_mod,
+    "array": _array_mod,
+    "struct": _struct_mod,
+    # Encoding / hashing
+    "base64": _base64_mod,
+    "hashlib": _hashlib_mod,
+    "uuid": _uuid_mod,
+    # Time / paths / viz
     "datetime": __import__("datetime"),
+    "pathlib": _pathlib_mod,
+    "colorsys": _colorsys_mod,
     "matplotlib": matplotlib,
     "matplotlib.pyplot": plt,
     "numpy": _numpy_mod,
-    "pathlib": _pathlib_mod,
 }
 
 def _safe_import(name, *args, **kwargs):
@@ -378,7 +431,7 @@ def _tool_save_chart(path: str, title: str = "") -> str:
 
         plt.plot([1,2,3], [10, 20, 15])
         plt.title("My Chart")
-        result = save_chart("Aetheria/charts/population.png")
+        result = save_chart("MyProject/charts/population.png")
     """
     _ensure_root()
     # Force .png extension
@@ -692,7 +745,7 @@ RUN them. The code is real. The results are real. Use them.
 
 ── FILE COMMANDS ──
 
-  [CREATE_PROJECT path]       — create a folder (nested OK: Aetheria/Luminos)
+  [CREATE_PROJECT path]       — create a folder (nested OK: MyProject/subfolder)
   [LIST_FILES path]           — list contents (omit path for root)
   [READ_FILE path/file.json]  — read a file
   [WRITE_FILE path/file.json] content [/WRITE_FILE]  — write a file
@@ -729,7 +782,7 @@ for year in range(1, 21):
     trade_income = max(0, trade_income * (1 + shock))
     treasury += trade_income - 80000  # expenses
     years.append({"year": year, "treasury": round(treasury), "trade": round(trade_income)})
-save_json("Aetheria/Luminos/economic_sim.json", years)
+save_json("MyProject/economic_sim.json", years)
 result = format_table(
     ["Year", "Treasury", "Trade Income"],
     [[y["year"], f"{y['treasury']:,}", f"{y['trade']:,}"] for y in years]
@@ -739,24 +792,24 @@ result = format_table(
 Example — generate a chart and save it as an image:
 
 ```python
-data = load_json("Aetheria/Luminos/economic_sim.json")
+data = load_json("MyProject/economic_sim.json")
 plt.figure(figsize=(10, 5))
 plt.plot([d["year"] for d in data], [d["treasury"] for d in data], label="Treasury")
 plt.plot([d["year"] for d in data], [d["trade"] for d in data], label="Trade Income")
 plt.xlabel("Year")
 plt.ylabel("Gold")
 plt.legend()
-result = save_chart("Aetheria/Luminos/charts/economic_crisis.png", "Economic Impact of Trade Disruption")
+result = save_chart("MyProject/charts/economic_crisis.png", "Economic Impact of Trade Disruption")
 ```
 
 Example — population simulation with dice mechanics:
 
 ```python
-cities = load_json("Aetheria/cities.json")
+cities = load_json("MyProject/cities.json")
 for city in cities["cities"]:
     growth_roll = roll("2d6") - 7  # -5 to +5 percent
     city["population"] = int(city["population"] * (1 + growth_roll/100))
-save_json("Aetheria/cities.json", cities)
+save_json("MyProject/cities.json", cities)
 result = format_table(["City", "Population"], [[c["name"], f"{c['population']:,}"] for c in cities["cities"]])
 ```
 
@@ -793,19 +846,19 @@ result = format_table(["City", "Population"], [[c["name"], f"{c['population']:,}
 
 ```python
 # See what's in the project
-result = list_project_files("Aetheria")            # top-level
-result = list_project_files("Aetheria/Luminos")     # subfolder
+result = list_project_files("MyProject")            # top-level
+result = list_project_files("MyProject/data")        # subfolder
 ```
 
 ```python
 # Check before loading — create if missing
-if file_exists("Aetheria/cities.json"):
-    cities = load_json("Aetheria/cities.json")
+if file_exists("MyProject/cities.json"):
+    cities = load_json("MyProject/cities.json")
     result = f"Loaded {len(cities['cities'])} cities"
 else:
     # File doesn't exist yet — create it with initial data
-    cities = {"cities": [{"name": "Luminos", "population": 50000}]}
-    save_json("Aetheria/cities.json", cities)
+    cities = {"cities": [{"name": "Haven", "population": 50000}]}
+    save_json("MyProject/cities.json", cities)
     result = "Created initial cities.json"
 ```
 
@@ -824,7 +877,7 @@ you create, and you can see everything he creates.
 
 ── FILE COMMANDS ──
 
-  [CREATE_PROJECT path]       — create a folder (nested OK: Aetheria/Luminos)
+  [CREATE_PROJECT path]       — create a folder (nested OK: MyProject/subfolder)
   [LIST_FILES path]           — list contents (omit path for root)
   [READ_FILE path/file.json]  — read a file
   [WRITE_FILE path/file.json] content [/WRITE_FILE]  — write a file
@@ -845,20 +898,20 @@ you create, and you can see everything he creates.
 ── EXAMPLES ──
 
 See what exists:
-  [LIST_FILES Aetheria]
+  [LIST_FILES MyProject]
 
 Read a data file Rex created:
-  [READ_FILE Aetheria/Luminos/economic_sim.json]
+  [READ_FILE MyProject/data/economic_sim.json]
 
 Create or update a file:
-  [WRITE_FILE Aetheria/lore/history.md]
-  # The History of Aetheria
+  [WRITE_FILE MyProject/lore/history.md]
+  # The History of Our World
 
   In the beginning, there were three kingdoms...
   [/WRITE_FILE]
 
 Add to an existing document:
-  [APPEND_FILE Aetheria/lore/history.md]
+  [APPEND_FILE MyProject/lore/history.md]
 
   ## Chapter 2: The Great Migration
   When resources grew scarce in the northern peaks...

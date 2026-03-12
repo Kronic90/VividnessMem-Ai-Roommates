@@ -280,24 +280,86 @@ def image_mime_type(image_path) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-#  Self-reminders (kept from old system)
+#  Self-reminders (numbered, manageable)
 # ═══════════════════════════════════════════════════════════════════════════
 
+def _load_reminders(owner: str) -> list[dict]:
+    """Load reminders as structured list from JSON file."""
+    path = ROOT / owner / "reminders.json"
+    if path.exists():
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, ValueError):
+            pass
+    # Migrate from old markdown format if it exists
+    md_path = ROOT / owner / "reminders.md"
+    if md_path.exists():
+        entries = _migrate_markdown_reminders(md_path)
+        if entries:
+            _save_reminders(owner, entries)
+            return entries
+    return []
+
+
+def _save_reminders(owner: str, reminders: list[dict]):
+    """Save reminders list to JSON."""
+    path = ROOT / owner / "reminders.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(reminders, f, indent=2, ensure_ascii=False)
+
+
+def _migrate_markdown_reminders(md_path) -> list[dict]:
+    """Convert old reminders.md entries to structured format."""
+    text = md_path.read_text(encoding="utf-8")
+    entries = []
+    blocks = text.split("---")
+    for block in blocks:
+        block = block.strip()
+        if not block or block.startswith("#"):
+            continue
+        # Extract timestamp if present
+        ts_match = re.search(r"\*\*\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2})\]\*\*", block)
+        timestamp = ts_match.group(1) if ts_match else datetime.now().strftime("%Y-%m-%d %H:%M")
+        # Get content after the timestamp line
+        content = re.sub(r"\*\*\[.*?\]\*\*\s*", "", block).strip()
+        if content:
+            entries.append({"timestamp": timestamp, "content": content})
+    return entries
+
+
 def save_reminder(owner: str, content: str) -> str:
-    path = ROOT / owner / "reminders.md"
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M")
-    entry = f"\n---\n**[{timestamp}]**\n{content.strip()}\n"
-    with open(path, "a", encoding="utf-8") as f:
-        f.write(entry)
-    return "Reminder saved."
+    reminders = _load_reminders(owner)
+    entry = {
+        "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "content": content.strip(),
+    }
+    reminders.append(entry)
+    _save_reminders(owner, reminders)
+    return f"Reminder #{len(reminders)} saved."
+
+
+def delete_reminder(owner: str, number: int, reason: str = "") -> str:
+    """Delete a reminder by number (1-based). Returns status + learning prompt."""
+    reminders = _load_reminders(owner)
+    if number < 1 or number > len(reminders):
+        return f"Invalid reminder number {number}. You have {len(reminders)} reminders (1-{len(reminders)})."
+    removed = reminders.pop(number - 1)
+    _save_reminders(owner, reminders)
+    result = f"Reminder #{number} deleted: \"{removed['content'][:80]}...\""
+    if reason:
+        result += f"\nReason noted: {reason}"
+    return result
 
 
 def read_reminders(owner: str) -> str:
-    path = ROOT / owner / "reminders.md"
-    if path.exists():
-        text = path.read_text(encoding="utf-8").strip()
-        return text if text else "(no reminders yet)"
-    return "(no reminders yet)"
+    reminders = _load_reminders(owner)
+    if not reminders:
+        return "(no reminders yet)"
+    lines = [f"Your current reminders ({len(reminders)} total):"]
+    for i, r in enumerate(reminders, 1):
+        lines.append(f"  #{i} [{r['timestamp']}] {r['content'][:150]}")
+    return "\n".join(lines)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -314,6 +376,14 @@ _RE_REMINDER = re.compile(
 )
 _RE_CHECK_BOARD = re.compile(
     r"\[CHECK_BOARD\]",
+    re.IGNORECASE,
+)
+_RE_DELETE_REMINDER = re.compile(
+    r"\[DELETE_REMINDER\s+#?(\d+)\](.*?)(?:\[/DELETE_REMINDER\]|</DELETE_REMINDER>)",
+    re.IGNORECASE | re.DOTALL,
+)
+_RE_LIST_REMINDERS = re.compile(
+    r"\[LIST_REMINDERS\]",
     re.IGNORECASE,
 )
 _RE_NEW_THREAD = re.compile(
@@ -347,6 +417,20 @@ def parse_ai_response(ai_name: str, raw_text: str, thread_id: str) -> tuple[str,
         result = save_reminder(ai_name, match.group(1))
         results.append(f"[Reminder] {result}")
     raw_text = _RE_REMINDER.sub("", raw_text)
+
+    # DELETE_REMINDER
+    for match in _RE_DELETE_REMINDER.finditer(raw_text):
+        num = int(match.group(1))
+        reason = match.group(2).strip()
+        result = delete_reminder(ai_name, num, reason)
+        results.append(f"[Reminder] {result}")
+    raw_text = _RE_DELETE_REMINDER.sub("", raw_text)
+
+    # LIST_REMINDERS
+    for _match in _RE_LIST_REMINDERS.finditer(raw_text):
+        result = read_reminders(ai_name)
+        results.append(f"[Reminders]\n{result}")
+    raw_text = _RE_LIST_REMINDERS.sub("", raw_text)
 
     clean_text = raw_text.strip()
     clean_text = re.sub(r"\n{3,}", "\n\n", clean_text)
@@ -431,6 +515,20 @@ def process_mid_conversation_tags(ai_name: str, raw_text: str) -> tuple[str, lis
         result = save_reminder(ai_name, match.group(1))
         results.append(f"[Reminder] {result}")
     raw_text = _RE_REMINDER.sub("", raw_text)
+
+    # DELETE_REMINDER
+    for match in _RE_DELETE_REMINDER.finditer(raw_text):
+        num = int(match.group(1))
+        reason = match.group(2).strip()
+        result = delete_reminder(ai_name, num, reason)
+        results.append(f"[Reminder] {result}")
+    raw_text = _RE_DELETE_REMINDER.sub("", raw_text)
+
+    # LIST_REMINDERS
+    for _match in _RE_LIST_REMINDERS.finditer(raw_text):
+        result = read_reminders(ai_name)
+        results.append(f"[Reminders]\n{result}")
+    raw_text = _RE_LIST_REMINDERS.sub("", raw_text)
 
     # SAVE_IMAGE — copy a board image to the projects folder
     for match in _RE_SAVE_IMAGE.finditer(raw_text):
