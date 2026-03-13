@@ -13,11 +13,23 @@ Architecture:
 Storage: JSON files under ai_dialogue_data/rex/
 """
 
+import base64
+import hashlib
+import hmac
 import json
 import os
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+
+# Optional encryption — only needed if you pass encryption_key
+try:
+    from cryptography.fernet import Fernet
+    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+    from cryptography.hazmat.primitives import hashes
+    _HAS_CRYPTO = True
+except ImportError:
+    _HAS_CRYPTO = False
 
 # ─── Storage paths ─────────────────────────────────────────────────────────
 DATA_DIR = Path(__file__).parent / "ai_dialogue_data" / "rex"
@@ -95,7 +107,23 @@ class RexMemory:
     CORE_SELF_LIMIT = 10
     CORE_SOCIAL_LIMIT = 5  # per entity
 
-    def __init__(self):
+    def __init__(self, encryption_key: str | None = None):
+        # ── Encryption setup ──────────────────────────────────────────
+        self._fernet: Fernet | None = None
+        self._hmac_key: bytes = b""
+        if encryption_key is not None:
+            if not _HAS_CRYPTO:
+                raise ImportError(
+                    "Optional dependency 'cryptography' is required for "
+                    "encryption.  Install it:  pip install cryptography"
+                )
+            self._init_crypto(encryption_key)
+
+        # File paths — encrypted files use .enc extension
+        ext = ".enc" if self._fernet else ".json"
+        self._self_file  = DATA_DIR / f"self_memory{ext}"
+        self._social_dir = SOCIAL_DIR
+
         _ensure_dirs()
 
         # ── Self Memory ──
@@ -107,6 +135,53 @@ class RexMemory:
         self.archival_social: dict[str, list[MemoryEntry]] = {}
 
         self._load()
+
+    # ─── Encryption helpers ───────────────────────────────────────────
+
+    def _init_crypto(self, password: str):
+        """Derive a Fernet key from the user's password using PBKDF2."""
+        salt_path = DATA_DIR / ".salt"
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        if salt_path.exists():
+            salt = salt_path.read_bytes()
+        else:
+            salt = os.urandom(16)
+            salt_path.write_bytes(salt)
+
+        kdf = PBKDF2HMAC(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=salt,
+            iterations=480_000,
+        )
+        key = base64.urlsafe_b64encode(kdf.derive(password.encode("utf-8")))
+        self._fernet = Fernet(key)
+        self._hmac_key = hashlib.sha256(b"filename-hmac:" + key).digest()
+
+    @property
+    def encrypted(self) -> bool:
+        return self._fernet is not None
+
+    def _write_json(self, path: Path, obj):
+        raw = json.dumps(obj, indent=2, ensure_ascii=False).encode("utf-8")
+        if self._fernet:
+            path.write_bytes(self._fernet.encrypt(raw))
+        else:
+            path.write_bytes(raw)
+
+    def _read_json(self, path: Path):
+        raw = path.read_bytes()
+        if self._fernet:
+            raw = self._fernet.decrypt(raw)
+        return json.loads(raw)
+
+    def _entity_filename(self, entity: str) -> str:
+        if self._fernet:
+            digest = hmac.new(self._hmac_key,
+                              entity.lower().encode("utf-8"),
+                              hashlib.sha256).hexdigest()[:16]
+            return f"{digest}.enc"
+        return entity.lower().replace(" ", "_") + ".json"
 
     # ─── Core Memory Operations ───────────────────────────────────────
 
@@ -209,8 +284,7 @@ class RexMemory:
             "core": [e.to_dict() for e in self.core_self],
             "archival": [e.to_dict() for e in self.archival_self],
         }
-        with open(SELF_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
+        self._write_json(self._self_file, data)
 
         # Social memory (one file per entity)
         all_entities = set(list(self.core_social.keys()) + list(self.archival_social.keys()))
@@ -219,26 +293,39 @@ class RexMemory:
                 "core": [e.to_dict() for e in self.core_social.get(entity, [])],
                 "archival": [e.to_dict() for e in self.archival_social.get(entity, [])],
             }
-            safe_name = entity.lower().replace(" ", "_")
-            with open(SOCIAL_DIR / f"{safe_name}.json", "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
+            fname = self._entity_filename(entity)
+            self._write_json(self._social_dir / fname, data)
 
     def _load(self):
         # Self memory
-        if SELF_FILE.exists():
-            with open(SELF_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            self.core_self = [MemoryEntry.from_dict(d) for d in data.get("core", [])]
-            self.archival_self = [MemoryEntry.from_dict(d) for d in data.get("archival", [])]
+        if self._self_file.exists():
+            try:
+                data = self._read_json(self._self_file)
+                self.core_self = [MemoryEntry.from_dict(d) for d in data.get("core", [])]
+                self.archival_self = [MemoryEntry.from_dict(d) for d in data.get("archival", [])]
+            except Exception as e:
+                print(f"[RexMemory] Warning: could not load self_memory, starting fresh ({e})")
 
         # Social memory
-        if SOCIAL_DIR.exists():
-            for fpath in SOCIAL_DIR.glob("*.json"):
-                entity = fpath.stem.replace("_", " ").title()
-                with open(fpath, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                self.core_social[entity] = [MemoryEntry.from_dict(d) for d in data.get("core", [])]
-                self.archival_social[entity] = [MemoryEntry.from_dict(d) for d in data.get("archival", [])]
+        if self._social_dir.exists():
+            ext = "*.enc" if self._fernet else "*.json"
+            for fpath in self._social_dir.glob(ext):
+                try:
+                    data = self._read_json(fpath)
+                    if self._fernet:
+                        entity = ""
+                        for d in data.get("core", []) + data.get("archival", []):
+                            if isinstance(d, dict) and d.get("source"):
+                                entity = d["source"]
+                                break
+                        if not entity:
+                            entity = fpath.stem
+                    else:
+                        entity = fpath.stem.replace("_", " ").title()
+                    self.core_social[entity] = [MemoryEntry.from_dict(d) for d in data.get("core", [])]
+                    self.archival_social[entity] = [MemoryEntry.from_dict(d) for d in data.get("archival", [])]
+                except Exception as e:
+                    print(f"[RexMemory] Warning: corrupt {fpath.name}, skipping ({e})")
 
     # ─── Stats ────────────────────────────────────────────────────────
 

@@ -3,6 +3,7 @@ VividnessMem — How To Use
 
 A standalone organic memory system for any LLM agent.
 Zero dependencies beyond Python 3.10+ standard library.
+(Optional: `pip install cryptography` for encrypted storage.)
 
 
 INSTALL
@@ -187,6 +188,61 @@ VividnessMem persists everything as plain JSON:
       social/
         alice.json           # impressions of Alice
         bob.json             # impressions of Bob
+
+
+ENCRYPTION (optional)
+---------------------
+VividnessMem supports opt-in at-rest encryption for all stored data.
+When enabled, every JSON file on disk is encrypted with AES-128-CBC +
+HMAC-SHA256 (Fernet), and entity filenames are hashed with HMAC-SHA256
+so real names never appear on the filesystem.
+
+Requires the `cryptography` package:
+
+    pip install cryptography
+
+Enable it by passing a password string to the constructor:
+
+    mem = VividnessMem(encryption_key="my-secret-passphrase")
+
+That's the only change — all other API calls remain identical.
+
+    # Same API, encrypted on disk
+    mem.add_self_reflection(content="I like jazz", emotion="happy", importance=7)
+    mem.save()
+
+    # To load later, pass the same key
+    mem2 = VividnessMem(encryption_key="my-secret-passphrase")
+    print(mem2.self_reflections)  # decrypted in memory
+
+    # Wrong password = graceful fallback (empty memory, logged warning)
+    mem3 = VividnessMem(encryption_key="wrong-password")
+    print(mem3.self_reflections)  # []
+
+How it works:
+  - Password is derived into a Fernet key via PBKDF2-HMAC-SHA256
+    with 480,000 iterations and a random 16-byte salt.
+  - The salt is stored once in <data_dir>/.salt (created on first use).
+  - Encrypted files use the .enc extension instead of .json.
+  - Entity filenames become HMAC-SHA256 hashes (e.g. a3f1b2c9e7d0.enc).
+  - If encryption_key is None (default), everything stays plaintext —
+    no extra dependencies needed.
+
+Encrypted file structure:
+
+    memory_data/
+      .salt                  # 16-byte random salt (keep this safe!)
+      self_memory.enc        # encrypted self-reflections
+      brief.enc              # encrypted briefs, session counter, mood
+      social/
+        a3f1b2c9e7d04f1a.enc # encrypted impressions (hashed name)
+        7bc0de913fa48e22.enc # another entity
+
+Security notes:
+  - The .salt file is critical — if lost, data cannot be decrypted.
+  - Store the encryption key securely (env variable, keyring, etc.).
+  - This protects data at rest. In-memory data is always plaintext.
+  - You cannot mix encrypted and plaintext modes on the same data_dir.
 
 
 KEY CONCEPTS

@@ -21,6 +21,7 @@ Features:
  • Inverted word/prefix index for O(k) resonance lookup
  • Touch dampener (only reinforces context-relevant memories)
  • Full JSON persistence to disk
+ • Optional AES encryption at rest (Fernet + PBKDF2)
 
 Author : Kronic90  — https://github.com/Kronic90/VividnessMem-Ai-Roommates
 License: MIT
@@ -28,6 +29,9 @@ License: MIT
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
 import json
 import math
 import os
@@ -35,6 +39,15 @@ import re
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+
+# Optional encryption — only needed if you pass encryption_key
+try:
+    from cryptography.fernet import Fernet
+    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+    from cryptography.hazmat.primitives import hashes
+    _HAS_CRYPTO = True
+except ImportError:
+    _HAS_CRYPTO = False
 
 # ═══════════════════════════════════════════════════════════════════════════
 #  Constants & helpers
@@ -290,11 +303,26 @@ class VividnessMem:
     RESONANCE_LIMIT        = 3
     RESONANCE_SCORE_FLOOR  = 2.5
 
-    def __init__(self, data_dir: str | Path = "memory_data"):
+    def __init__(self, data_dir: str | Path = "memory_data",
+                 encryption_key: str | None = None):
         self.data_dir   = Path(data_dir)
-        self.self_file  = self.data_dir / "self_memory.json"
         self.social_dir = self.data_dir / "social"
-        self.brief_file = self.data_dir / "brief.json"
+
+        # ── Encryption setup ──────────────────────────────────────────
+        self._fernet: Fernet | None = None
+        self._hmac_key: bytes = b""
+        if encryption_key is not None:
+            if not _HAS_CRYPTO:
+                raise ImportError(
+                    "Optional dependency 'cryptography' is required for "
+                    "encryption.  Install it:  pip install cryptography"
+                )
+            self._init_crypto(encryption_key)
+
+        # File paths — encrypted files use .enc extension
+        ext = ".enc" if self._fernet else ".json"
+        self.self_file  = self.data_dir / f"self_memory{ext}"
+        self.brief_file = self.data_dir / f"brief{ext}"
 
         self.self_reflections: list[Memory] = []
         self.social_impressions: dict[str, list[Memory]] = {}
@@ -312,10 +340,76 @@ class VividnessMem:
         # Mood state (PAD vector)
         self._mood: tuple[float, float, float] = (0.0, 0.0, 0.0)
 
+        # Reverse-lookup: hashed filename → real entity name (for encrypted load)
+        self._entity_hash_map: dict[str, str] = {}
+
         self._ensure_dirs()
         self._load()
         self._load_brief()
         self._rebuild_index()
+
+    # ── Encryption helpers ─────────────────────────────────────────────
+
+    def _init_crypto(self, password: str):
+        """Derive a Fernet key from the user's password using PBKDF2.
+
+        A random salt is generated on first use and stored in the data
+        directory.  Subsequent loads read the same salt so the same
+        password always produces the same key.
+        """
+        salt_path = Path(self.data_dir) / ".salt"
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        if salt_path.exists():
+            salt = salt_path.read_bytes()
+        else:
+            salt = os.urandom(16)
+            salt_path.write_bytes(salt)
+
+        kdf = PBKDF2HMAC(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=salt,
+            iterations=480_000,          # OWASP 2023 recommendation
+        )
+        key = base64.urlsafe_b64encode(kdf.derive(password.encode("utf-8")))
+        self._fernet = Fernet(key)
+        # Separate HMAC key for filename hashing (derived from same password
+        # but with a different salt prefix so it's independent)
+        self._hmac_key = hashlib.sha256(b"filename-hmac:" + key).digest()
+
+    @property
+    def encrypted(self) -> bool:
+        """True when at-rest encryption is active."""
+        return self._fernet is not None
+
+    def _write_json(self, path: Path, obj):
+        """Write a Python object as JSON — encrypted if a key is set."""
+        raw = json.dumps(obj, indent=2, ensure_ascii=False).encode("utf-8")
+        if self._fernet:
+            path.write_bytes(self._fernet.encrypt(raw))
+        else:
+            path.write_bytes(raw)
+
+    def _read_json(self, path: Path):
+        """Read JSON from disk — decrypting if a key is set."""
+        raw = path.read_bytes()
+        if self._fernet:
+            raw = self._fernet.decrypt(raw)
+        return json.loads(raw)
+
+    def _entity_filename(self, entity: str) -> str:
+        """Return a safe filename for an entity.
+
+        Plain-text mode: ``alice.json``
+        Encrypted mode : HMAC-SHA256 hash + ``.enc`` — hides who the
+        agent has interacted with.
+        """
+        if self._fernet:
+            digest = hmac.new(self._hmac_key,
+                              entity.lower().encode("utf-8"),
+                              hashlib.sha256).hexdigest()[:16]
+            return f"{digest}.enc"
+        return entity.lower().replace(" ", "_") + ".json"
 
     # ── directory setup ───────────────────────────────────────────────
     def _ensure_dirs(self):
@@ -928,45 +1022,55 @@ class VividnessMem:
     # ── Persistence ───────────────────────────────────────────────────
 
     def save(self):
-        """Persist all memory data to disk."""
+        """Persist all memory data to disk (encrypted if key was provided)."""
         self._ensure_dirs()
 
-        data = [r.to_dict() for r in self.self_reflections]
-        with open(self.self_file, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
+        self._write_json(self.self_file,
+                         [r.to_dict() for r in self.self_reflections])
 
         for entity, impressions in self.social_impressions.items():
-            data = [r.to_dict() for r in impressions]
-            safe_name = entity.lower().replace(" ", "_")
-            with open(self.social_dir / f"{safe_name}.json", "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
+            fname = self._entity_filename(entity)
+            self._write_json(self.social_dir / fname,
+                             [r.to_dict() for r in impressions])
 
     def _load(self):
         if self.self_file.exists():
             try:
-                with open(self.self_file, "r", encoding="utf-8") as f:
-                    data = json.load(f)
+                data = self._read_json(self.self_file)
                 if isinstance(data, list):
                     self.self_reflections = [
                         Memory.from_dict(d) for d in data
                         if isinstance(d, dict) and "content" in d
                     ]
-            except (json.JSONDecodeError, KeyError, TypeError) as e:
-                print(f"[VividnessMem] Warning: corrupt self_memory.json, starting fresh ({e})")
+            except Exception as e:
+                print(f"[VividnessMem] Warning: could not load self_memory, starting fresh ({e})")
                 self.self_reflections = []
 
         if self.social_dir.exists():
-            for fpath in self.social_dir.glob("*.json"):
-                entity = fpath.stem.replace("_", " ").title()
+            ext = "*.enc" if self._fernet else "*.json"
+            for fpath in self.social_dir.glob(ext):
                 try:
-                    with open(fpath, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                    if isinstance(data, list):
-                        self.social_impressions[entity] = [
-                            Memory.from_dict(d) for d in data
-                            if isinstance(d, dict) and "content" in d
-                        ]
-                except (json.JSONDecodeError, KeyError, TypeError) as e:
+                    data = self._read_json(fpath)
+                    if not isinstance(data, list):
+                        continue
+                    # Recover entity name: encrypted files store it inside,
+                    # plain files derive it from the filename.
+                    if self._fernet:
+                        # First entry's 'entity' field (or fallback to hash)
+                        entity = ""
+                        for d in data:
+                            if isinstance(d, dict) and d.get("entity"):
+                                entity = d["entity"]
+                                break
+                        if not entity:
+                            entity = fpath.stem  # fallback
+                    else:
+                        entity = fpath.stem.replace("_", " ").title()
+                    self.social_impressions[entity] = [
+                        Memory.from_dict(d) for d in data
+                        if isinstance(d, dict) and "content" in d
+                    ]
+                except Exception as e:
                     print(f"[VividnessMem] Warning: corrupt {fpath.name}, skipping ({e})")
 
     # ── Brief & maintenance ───────────────────────────────────────────
@@ -974,19 +1078,17 @@ class VividnessMem:
     def _load_brief(self):
         if self.brief_file.exists():
             try:
-                with open(self.brief_file, "r", encoding="utf-8") as f:
-                    data = json.load(f)
+                data = self._read_json(self.brief_file)
                 if isinstance(data, dict):
                     self._brief_data.update(data)
-            except (json.JSONDecodeError, KeyError, TypeError):
+            except Exception:
                 pass
         self._load_mood()
 
     def _save_brief(self):
         self._ensure_dirs()
         self._save_mood()
-        with open(self.brief_file, "w", encoding="utf-8") as f:
-            json.dump(self._brief_data, f, indent=2, ensure_ascii=False)
+        self._write_json(self.brief_file, self._brief_data)
 
     def bump_session(self) -> int:
         """Increment session counter. Returns new count."""

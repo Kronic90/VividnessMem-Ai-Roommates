@@ -19,6 +19,9 @@ Architecture:
 Storage: JSON files under ai_dialogue_data/aria/
 """
 
+import base64
+import hashlib
+import hmac
 import json
 import math
 import os
@@ -26,6 +29,15 @@ import re
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+
+# Optional encryption — only needed if you pass encryption_key
+try:
+    from cryptography.fernet import Fernet
+    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+    from cryptography.hazmat.primitives import hashes
+    _HAS_CRYPTO = True
+except ImportError:
+    _HAS_CRYPTO = False
 
 # Minimum word-overlap ratio to consider two memories duplicates
 _DEDUP_THRESHOLD = 0.80
@@ -345,7 +357,24 @@ class AriaMemory:
     # instead of hard-capping at RESONANCE_LIMIT
     RESONANCE_SCORE_FLOOR = 2.5  # overlap + importance*0.2 must exceed this
 
-    def __init__(self):
+    def __init__(self, encryption_key: str | None = None):
+        # ── Encryption setup ──────────────────────────────────────────
+        self._fernet: Fernet | None = None
+        self._hmac_key: bytes = b""
+        if encryption_key is not None:
+            if not _HAS_CRYPTO:
+                raise ImportError(
+                    "Optional dependency 'cryptography' is required for "
+                    "encryption.  Install it:  pip install cryptography"
+                )
+            self._init_crypto(encryption_key)
+
+        # File paths — encrypted files use .enc extension
+        ext = ".enc" if self._fernet else ".json"
+        self._self_file  = DATA_DIR / f"self_memory{ext}"
+        self._social_dir = SOCIAL_DIR
+        self._brief_file = DATA_DIR / f"brief{ext}"
+
         _ensure_dirs()
 
         # ── Self Memory (identity journal) ──
@@ -375,6 +404,57 @@ class AriaMemory:
         self._load()
         self._rebuild_index()
         self._load_brief()
+
+    # ─── Encryption helpers ───────────────────────────────────────────
+
+    def _init_crypto(self, password: str):
+        """Derive a Fernet key from the user's password using PBKDF2."""
+        salt_path = DATA_DIR / ".salt"
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        if salt_path.exists():
+            salt = salt_path.read_bytes()
+        else:
+            salt = os.urandom(16)
+            salt_path.write_bytes(salt)
+
+        kdf = PBKDF2HMAC(
+            algorithm=hashes.SHA256(),
+            length=32,
+            salt=salt,
+            iterations=480_000,
+        )
+        key = base64.urlsafe_b64encode(kdf.derive(password.encode("utf-8")))
+        self._fernet = Fernet(key)
+        self._hmac_key = hashlib.sha256(b"filename-hmac:" + key).digest()
+
+    @property
+    def encrypted(self) -> bool:
+        return self._fernet is not None
+
+    def _write_json(self, path: Path, obj):
+        raw = json.dumps(obj, indent=2, ensure_ascii=False).encode("utf-8")
+        fernet = getattr(self, '_fernet', None)
+        if fernet:
+            path.write_bytes(fernet.encrypt(raw))
+        else:
+            path.write_bytes(raw)
+
+    def _read_json(self, path: Path):
+        raw = path.read_bytes()
+        fernet = getattr(self, '_fernet', None)
+        if fernet:
+            raw = fernet.decrypt(raw)
+        return json.loads(raw)
+
+    def _entity_filename(self, entity: str) -> str:
+        fernet = getattr(self, '_fernet', None)
+        if fernet:
+            hmac_key = getattr(self, '_hmac_key', None)
+            digest = hmac.new(hmac_key,
+                              entity.lower().encode("utf-8"),
+                              hashlib.sha256).hexdigest()[:16]
+            return f"{digest}.enc"
+        return entity.lower().replace(" ", "_") + ".json"
 
     # ─── Add Memories ─────────────────────────────────────────────────
 
@@ -1037,40 +1117,56 @@ class AriaMemory:
     def save(self):
         _ensure_dirs()
 
+        # Guard for __new__ bypass (tests that skip __init__)
+        self_file = getattr(self, '_self_file', SELF_FILE)
+        social_dir = getattr(self, '_social_dir', SOCIAL_DIR)
+
         # Self memory
-        data = [r.to_dict() for r in self.self_reflections]
-        with open(SELF_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
+        self._write_json(self_file,
+                         [r.to_dict() for r in self.self_reflections])
 
         # Social memory (one file per entity)
         for entity, impressions in self.social_impressions.items():
-            data = [r.to_dict() for r in impressions]
-            safe_name = entity.lower().replace(" ", "_")
-            with open(SOCIAL_DIR / f"{safe_name}.json", "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2, ensure_ascii=False)
+            fname = self._entity_filename(entity)
+            self._write_json(social_dir / fname,
+                             [r.to_dict() for r in impressions])
 
     def _load(self):
+        # Guard for __new__ bypass
+        self_file = getattr(self, '_self_file', SELF_FILE)
+        social_dir = getattr(self, '_social_dir', SOCIAL_DIR)
+        fernet = getattr(self, '_fernet', None)
+
         # Self memory
-        if SELF_FILE.exists():
+        if self_file.exists():
             try:
-                with open(SELF_FILE, "r", encoding="utf-8") as f:
-                    data = json.load(f)
+                data = self._read_json(self_file)
                 if isinstance(data, list):
                     self.self_reflections = [Reflection.from_dict(d) for d in data if isinstance(d, dict) and "content" in d]
-            except (json.JSONDecodeError, KeyError, TypeError) as e:
-                print(f"[AriaMemory] Warning: corrupt self_memory.json, starting fresh ({e})")
+            except Exception as e:
+                print(f"[AriaMemory] Warning: could not load self_memory, starting fresh ({e})")
                 self.self_reflections = []
 
         # Social memory
-        if SOCIAL_DIR.exists():
-            for fpath in SOCIAL_DIR.glob("*.json"):
-                entity = fpath.stem.replace("_", " ").title()
+        if social_dir.exists():
+            ext = "*.enc" if fernet else "*.json"
+            for fpath in social_dir.glob(ext):
                 try:
-                    with open(fpath, "r", encoding="utf-8") as f:
-                        data = json.load(f)
-                    if isinstance(data, list):
-                        self.social_impressions[entity] = [Reflection.from_dict(d) for d in data if isinstance(d, dict) and "content" in d]
-                except (json.JSONDecodeError, KeyError, TypeError) as e:
+                    data = self._read_json(fpath)
+                    if not isinstance(data, list):
+                        continue
+                    if fernet:
+                        entity = ""
+                        for d in data:
+                            if isinstance(d, dict) and d.get("source"):
+                                entity = d["source"]
+                                break
+                        if not entity:
+                            entity = fpath.stem
+                    else:
+                        entity = fpath.stem.replace("_", " ").title()
+                    self.social_impressions[entity] = [Reflection.from_dict(d) for d in data if isinstance(d, dict) and "content" in d]
+                except Exception as e:
                     print(f"[AriaMemory] Warning: corrupt {fpath.name}, skipping ({e})")
 
     # ─── Stats ────────────────────────────────────────────────────────
@@ -1089,13 +1185,13 @@ class AriaMemory:
 
     def _load_brief(self):
         """Load compressed brief, session counter, and mood state from disk."""
-        if BRIEF_FILE.exists():
+        brief_file = getattr(self, '_brief_file', BRIEF_FILE)
+        if brief_file.exists():
             try:
-                with open(BRIEF_FILE, "r", encoding="utf-8") as f:
-                    data = json.load(f)
+                data = self._read_json(brief_file)
                 if isinstance(data, dict):
                     self._brief_data.update(data)
-            except (json.JSONDecodeError, KeyError, TypeError):
+            except Exception:
                 pass  # keep defaults
         # Restore mood state
         self._load_mood()
@@ -1104,8 +1200,8 @@ class AriaMemory:
         """Save compressed brief, session counter, and mood state to disk."""
         _ensure_dirs()
         self._save_mood()  # persist mood into brief data before writing
-        with open(BRIEF_FILE, "w", encoding="utf-8") as f:
-            json.dump(self._brief_data, f, indent=2, ensure_ascii=False)
+        brief_file = getattr(self, '_brief_file', BRIEF_FILE)
+        self._write_json(brief_file, self._brief_data)
 
     def bump_session(self) -> int:
         """Increment session counter. Returns new count."""
