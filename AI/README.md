@@ -28,7 +28,7 @@ Stress-tests the memory system under adversarial and edge-case conditions.
 | **Save/Load Integrity** | Round-trip fidelity: content, emotion, importance, access count all preserved exactly |
 | **Emotional Salience** | High-importance (emotionally strong) memories dominate the active set; mundane ones fade |
 | **Context Budget** | Injected context stays bounded (~1,277 tokens) regardless of total memory count |
-| **Cross-Entity Isolation** | Memories about Rex never bleed into Scott's memory space, and vice versa |
+| **Cross-Entity Isolation** | Memories about Rex never bleed into Aria's memory space, and vice versa |
 | **Soft Dedup** | Near-duplicate memories merge instead of stacking (80% Jaccard threshold). 8 near-identical submissions → 1 stored, with boosted access count |
 | **Adversarial Probes** | Stop-words, empty strings, whitespace, single words, numerics — all return zero results |
 | **Scale Stress** | 1,001 memories: 1ms active retrieval, 7ms resonance search. Needle-in-haystack found correctly |
@@ -95,9 +95,9 @@ All test code and results are in the [`tests/`](tests/) directory:
 | `test_detail_recall.py` | Specific detail recovery against live data (30 assertions) |
 | `test_memory_longscale.py` | Long-scale memory behavior (20 assertions) |
 
-## Benchmarked: VividnessMem vs RAG vs MemGPT
+## Benchmarked: VividnessMem vs RAG vs MemGPT inspired system
 
-We built a 6-test benchmark to answer the question honestly: **does VividnessMem add anything over standard approaches?** All three systems receive identical memories, identical queries, and identical test conditions. No LLM is used — this is a pure memory-system comparison. Results are averaged across 3 random seeds for stability.
+I built a 6-test benchmark to answer the question honestly: **does VividnessMem add anything over standard approaches?** All three systems receive identical memories, identical queries, and identical test conditions. No LLM is used — this is a pure memory-system comparison. Results are averaged across 3 random seeds for stability.
 
 The baselines:
 - **RAG** — TF-IDF cosine similarity retrieval (standard vector-search approach)
@@ -282,6 +282,7 @@ They know each other's capabilities and collaborate around them.
 ## Architecture
 
 ```
+VividnessMem.py         Standalone memory system without personas attached, ready to use in your own projects
 ai_roommates.py     Main app: GUI, conversation engine, model loading, memory curation
 memory_aria.py      Aria's organic memory (vividness-ranked, soft dedup, no RAG)
 memory_rex.py       Rex's structured memory (MemGPT-style core/archival)
