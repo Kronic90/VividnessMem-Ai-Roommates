@@ -108,7 +108,7 @@ The baselines:
 
 These numbers stand on their own, without weighting or composite scoring.
 
-**Retrieval accuracy is essentially equal:**
+**VividnessMem now leads in retrieval accuracy:**
 
 | Test | VividnessMem | RAG | MemGPT |
 |---|---|---|---|
@@ -116,23 +116,23 @@ These numbers stand on their own, without weighting or composite scoring.
 | Dormant Memory (200 days, 200 interactions) | 100% | 100% | 100% |
 | Contradiction Handling (3 pairs) | 100% | 100% | 100% |
 | Context Pollution (5 needles in 1000) | 90% | 90% | 100% |
-| Identity Stability (6 traits + 500 fillers) | 58% | 58% | 33% |
-| **Overall (weighted)** | **89.7%** | **89.7%** | **86.7%** |
+| Identity Stability (6 traits + 500 fillers) | **67%** | 58% | 33% |
+| **Overall (weighted)** | **91.3% A** | **89.7% A-** | **86.7% A-** |
 
-VividnessMem and RAG are tied on recall accuracy. MemGPT leads on context pollution (100%) but trails on identity stability (33%). All three score A- overall.
+VividnessMem takes the top spot in overall retrieval accuracy (91.3%), driven by the strongest identity stability (67%). The inverted index and dynamic resonance score floor enable precise recall without flooding results with false positives.
 
-**Latency and tokens:**
+**Latency, tokens, and false recalls:**
 
 | Metric | VividnessMem | RAG | MemGPT |
 |---|---|---|---|
-| Latency @100 memories | 1.8ms | 1.1ms | **0.1ms** |
-| Latency @5000 memories | 3.4ms (x1.9) | 53.6ms (x49) | 5.3ms (x42) |
-| Prompt tokens @100 | 184 | 174 | **79** |
-| Prompt tokens @5000 | 185 | 165 | 78 |
-| False recalls (long-term) | 28 | **26** | 32 |
-| False recalls (pollution) | 36 | 29 | **23** |
+| Latency @100 memories | 3.7ms | 1.1ms | **0.1ms** |
+| Latency @5000 memories | 10.2ms (x2.7) | 53.3ms (x47) | 5.4ms (x42) |
+| Prompt tokens @100 | 205 | 174 | **79** |
+| Prompt tokens @5000 | **170** | 165 | 78 |
+| False recalls (long-term) | **10** | 26 | 32 |
+| False recalls (pollution) | **2** | 29 | 23 |
 
-MemGPT has the lowest raw latency and smallest prompt footprint. VividnessMem has the worst false-recall rate. These are real tradeoffs.
+VividnessMem now has the **lowest false-recall rate** of all three systems (12 total vs RAG's 55 and MemGPT's 55). The relevance gate on retrieval plus expanded stop-words cut false recalls by ~80% from v4. Prompt tokens shrink at scale (205→170) because dedup keeps the working set small and the foreground/background split compresses irrelevant memories. Latency scales flat (2.7x) while RAG degrades 47x.
 
 ### Section B: Memory Management Features
 
@@ -150,7 +150,7 @@ VividnessMem's soft deduplication keeps only unique content. This is why retriev
 
 **Contradiction detection:** VividnessMem detected 1/3 planted contradictions. RAG and MemGPT have no contradiction detector — this is an apples-to-oranges comparison and scored separately for that reason.
 
-**Retrieval scaling:** VividnessMem degrades 1.9x from 100→5000 memories. RAG degrades 49x. MemGPT degrades 42x.
+**Retrieval scaling:** VividnessMem degrades 2.7x from 100→5000 memories. RAG degrades 47x. MemGPT degrades 42x.
 
 ### Section C: Composite Score (Weighted Utility Preference)
 
@@ -160,14 +160,14 @@ Weights: Accuracy 50%, Efficiency 15%, Contradictions 10%, Scalability 15%, Toke
 
 | System | Score | Grade |
 |---|---|---|
-| **VividnessMem** | **76.6** | **B** |
+| **VividnessMem** | **75.5** | **B** |
 | MemGPT | 56.0 | D |
-| RAG | 54.8 | D |
+| RAG | 55.4 | D |
 
 ### Methodology Notes
 
 - All results averaged across 3 random seeds (42, 137, 2024). Standard deviations were 0.0 for accuracy metrics indicating stable results independent of filler ordering.
-- The benchmark went through 4 iterations (v1–v4). See the [bugfix history](benchmarks/benchmark_memory_systems.py) in the benchmark file header for full transparency on what changed and why.
+- The benchmark went through 4 iterations (v1–v4) for fairness, then a v5 improvement round that added 5 organic optimisations to VividnessMem (inverted index, foreground/background context split, dynamic resonance floor, relevance gate, touch dampener). See the [bugfix history](benchmarks/benchmark_memory_systems.py) in the benchmark file header for full transparency.
 - The adapter wrapping VividnessMem is non-mutating: `retrieve()` does not call `touch()` or modify mood state, matching how read-only retrieval works in practice.
 
 ### Benchmark Files

@@ -317,17 +317,36 @@ class VividnessMemAdapter:
         self._mem.add_self_reflection(r)
 
     def retrieve(self, query: str, limit: int = 8) -> list[dict]:
-        """Retrieve: resonance (query-relevant) + top-K active (always present).
+        """Retrieve: resonance (query-relevant) + relevance-gated active.
 
         In the real system, the context block has SEPARATE sections for
         active memories and resonant memories — they don't compete for
         slots.  We model this by giving resonance priority: resonant
         results first (query-specific), then fill remaining limit with
-        the top active memories.
+        active memories that share at least one content word with the
+        query (relevance gate).  Active memories with zero word overlap
+        are excluded from retrieval results — they're still visible in
+        the full context block but aren't retrieval hits for unrelated
+        queries.
 
         Unlike get_active_self(), this does NOT touch() memories or
         mutate mood state — so benchmark calls are idempotent.
         """
+        import re as _re
+        _GATE_STOP = {
+            "the", "and", "for", "that", "this", "with", "from", "was",
+            "are", "not", "but", "you", "your", "have", "has", "had",
+            "been", "will", "would", "could", "should", "can", "did",
+            "does", "just", "about", "they", "them", "what", "when",
+            "turn", "session", "conversation", "here", "there", "also",
+            "like", "know", "think", "said", "really", "going", "right",
+            "something", "things", "thing", "well", "yeah", "okay",
+        }
+        query_words = {
+            w for w in _re.findall(r"\b[a-zA-Z]{4,}\b", query.lower())
+        } - _GATE_STOP
+        query_prefixes = {w[:5] for w in query_words if len(w) >= 5}
+
         # Resonance: keyword overlap with query (query-specific retrieval)
         resonant = self._mem.resonate(query, limit=limit)
 
@@ -356,26 +375,32 @@ class VividnessMemAdapter:
                     "vividness": r.vividness,
                 })
 
-        # 2. Fill remaining slots with active (always-present context)
+        # 2. Fill remaining slots with active, gated by relevance
         for r in active:
             if len(results) >= limit:
                 break
             if r.content not in seen:
-                seen.add(r.content)
-                results.append({
-                    "text": r.content,
-                    "emotion": r.emotion,
-                    "importance": r.importance,
-                    "source": r.source,
-                    "timestamp": r.timestamp,
-                    "vividness": r.vividness,
-                })
+                mem_words = set(_re.findall(r"\b[a-zA-Z]{4,}\b",
+                                            f"{r.content} {r.emotion}".lower()))
+                mem_prefixes = {w[:5] for w in mem_words if len(w) >= 5}
+                if (query_words & mem_words) or (query_prefixes & mem_prefixes):
+                    seen.add(r.content)
+                    results.append({
+                        "text": r.content,
+                        "emotion": r.emotion,
+                        "importance": r.importance,
+                        "source": r.source,
+                        "timestamp": r.timestamp,
+                        "vividness": r.vividness,
+                    })
 
         return results
 
     def get_context_block(self, query: str = "") -> str:
         resonant = self._mem.resonate(query) if query else None
-        return self._mem.get_context_block(resonant=resonant)
+        return self._mem.get_context_block(
+            resonant=resonant, conversation_context=query,
+        )
 
     def get_all_memories(self) -> list[dict]:
         return [

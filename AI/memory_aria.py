@@ -66,6 +66,11 @@ _RESONANCE_STOP = {
     "like", "know", "think", "said", "really", "going", "right",
     "something", "things", "thing", "well", "yeah", "okay",
     "aria", "rex",  # don't resonate on names alone
+    # Temporal / low-information words that cause false resonance
+    "today", "yesterday", "tomorrow", "time", "some", "very",
+    "much", "more", "most", "nice", "good", "great", "pretty",
+    "into", "then", "than", "been", "make", "made", "came",
+    "found", "each", "every", "many", "other", "after", "before",
 }
 
 # ─── Storage paths ─────────────────────────────────────────────────────────
@@ -336,11 +341,20 @@ class AriaMemory:
     ACTIVE_SOCIAL_LIMIT = 5  # per entity
     RESONANCE_LIMIT = 3  # max old memories that can resurface per turn
 
+    # Dynamic resonance: include all matches above this score floor
+    # instead of hard-capping at RESONANCE_LIMIT
+    RESONANCE_SCORE_FLOOR = 2.5  # overlap + importance*0.2 must exceed this
+
     def __init__(self):
         _ensure_dirs()
 
         # ── Self Memory (identity journal) ──
         self.self_reflections: list[Reflection] = []
+
+        # ── Inverted index: word/prefix → set of memory indices ──
+        # Enables O(k) resonance lookup instead of O(N) full scan
+        self._word_index: dict[str, set[int]] = {}
+        self._prefix_index: dict[str, set[int]] = {}
 
         # ── Social Memory (per entity) ──
         self.social_impressions: dict[str, list[Reflection]] = {}
@@ -359,9 +373,31 @@ class AriaMemory:
         }
 
         self._load()
+        self._rebuild_index()
         self._load_brief()
 
     # ─── Add Memories ─────────────────────────────────────────────────
+
+    def _index_memory(self, idx: int):
+        """Add a single memory to the inverted index."""
+        # Guard: ensure index dicts exist (object may bypass __init__)
+        if not hasattr(self, '_word_index'):
+            self._word_index: dict[str, set[int]] = {}
+            self._prefix_index: dict[str, set[int]] = {}
+        ref = self.self_reflections[idx]
+        text = f"{ref.content} {ref.emotion}".lower()
+        words = set(re.findall(r"\b[a-zA-Z]{4,}\b", text)) - _RESONANCE_STOP
+        for w in words:
+            self._word_index.setdefault(w, set()).add(idx)
+            if len(w) >= 5:
+                self._prefix_index.setdefault(w[:5], set()).add(idx)
+
+    def _rebuild_index(self):
+        """Rebuild the full inverted index from scratch."""
+        self._word_index = {}
+        self._prefix_index = {}
+        for idx in range(len(self.self_reflections)):
+            self._index_memory(idx)
 
     def add_self_reflection(self, reflection: Reflection):
         """Add a new self-reflection, merging if near-duplicate exists."""
@@ -375,8 +411,12 @@ class AriaMemory:
                 if reflection.emotion and len(reflection.emotion) > len(existing.emotion):
                     existing.emotion = reflection.emotion
                 existing.touch()  # reinforce — she thought about this again
+                # Re-index the merged memory (content may have changed)
+                idx = self.self_reflections.index(existing)
+                self._index_memory(idx)
                 return
         self.self_reflections.append(reflection)
+        self._index_memory(len(self.self_reflections) - 1)
 
     def add_social_impression(self, entity: str, reflection: Reflection):
         """Add an impression about another entity, merging if near-duplicate."""
@@ -397,11 +437,16 @@ class AriaMemory:
 
     # ─── Surface Memories (by vividness, mood-adjusted) ─────────────
 
-    def get_active_self(self) -> list[Reflection]:
+    def get_active_self(self, context: str = "") -> list[Reflection]:
         """Return the most vivid self-reflections for context injection.
 
         Uses mood-congruent recall: memories whose emotional tone matches
         the current mood state feel slightly more vivid and surface more readily.
+
+        Touch dampener: only memories relevant to the current context
+        get touch()-ed. Irrelevant memories in the active set stay but
+        don't get artificially reinforced, letting them naturally decay
+        out over time. This prevents the rich-get-richer problem.
         """
         sorted_refs = sorted(
             self.self_reflections,
@@ -409,11 +454,58 @@ class AriaMemory:
             reverse=True,
         )
         active = sorted_refs[:self.ACTIVE_SELF_LIMIT]
-        for r in active:
-            r.touch()  # accessing makes it more vivid
-        # Update mood based on what surfaced
-        self._absorb_mood_from_memories(active, weight=0.3)
+
+        # Touch dampener: only reinforce memories relevant to current context
+        if context:
+            ctx_words = {
+                w for w in re.findall(r"\b[a-zA-Z]{4,}\b", context.lower())
+            } - _RESONANCE_STOP
+            ctx_prefixes = {w[:5] for w in ctx_words if len(w) >= 5}
+            touched = []
+            for r in active:
+                mem_words = set(re.findall(r"\b[a-zA-Z]{4,}\b",
+                                           f"{r.content} {r.emotion}".lower()))
+                mem_prefixes = {w[:5] for w in mem_words if len(w) >= 5}
+                if (ctx_words & mem_words) or (ctx_prefixes & mem_prefixes):
+                    r.touch()
+                    touched.append(r)
+            self._absorb_mood_from_memories(touched, weight=0.3)
+        else:
+            # No context: fallback to touching all (legacy behavior)
+            for r in active:
+                r.touch()
+            self._absorb_mood_from_memories(active, weight=0.3)
         return active
+
+    def partition_active_self(self, context: str = "") -> tuple[list[Reflection], list[Reflection]]:
+        """Split active memories into foreground (relevant) and background (not).
+
+        Foreground: memories with word overlap to the current conversation
+        Background: always-present but not currently relevant
+
+        This is how organic memory works — you're always aware of core
+        beliefs in the background, but the conversation brings specific
+        memories into sharp focus.
+        """
+        active = self.get_active_self(context=context)
+        if not context:
+            return active, []
+
+        ctx_words = {
+            w for w in re.findall(r"\b[a-zA-Z]{4,}\b", context.lower())
+        } - _RESONANCE_STOP
+        ctx_prefixes = {w[:5] for w in ctx_words if len(w) >= 5}
+
+        foreground, background = [], []
+        for r in active:
+            mem_words = set(re.findall(r"\b[a-zA-Z]{4,}\b",
+                                       f"{r.content} {r.emotion}".lower()))
+            mem_prefixes = {w[:5] for w in mem_words if len(w) >= 5}
+            if (ctx_words & mem_words) or (ctx_prefixes & mem_prefixes):
+                foreground.append(r)
+            else:
+                background.append(r)
+        return foreground, background
 
     def get_active_social(self, entity: str) -> list[Reflection]:
         """Return the most vivid impressions of a specific entity."""
@@ -758,18 +850,17 @@ class AriaMemory:
     def resonate(self, context: str, limit: int | None = None) -> list[Reflection]:
         """Find old faded memories that resonate with current conversation.
 
-        Searches ALL memories (including ones below the active threshold)
-        for keyword overlap with the conversation context. Matching memories
-        get a .touch() boost, potentially pulling them back into the active
-        set over time — like suddenly remembering something from months ago
-        because the conversation triggered it.
+        Uses the inverted index for O(k) lookup instead of scanning all
+        memories. Dynamic limit: returns all matches above RESONANCE_SCORE_FLOOR
+        up to max(RESONANCE_LIMIT, limit), so strong multi-match queries
+        surface more memories while weak queries don't waste slots.
 
         After finding keyword-resonant memories, walks the association graph
         to find memories connected by shared concepts (associative chains).
 
         Returns only memories that are NOT already in the active set.
         """
-        n = limit or self.RESONANCE_LIMIT
+        hard_cap = max(limit or self.RESONANCE_LIMIT, self.RESONANCE_LIMIT + 3)
         if not context or not self.self_reflections:
             return []
 
@@ -780,6 +871,8 @@ class AriaMemory:
         if not context_words:
             return []
 
+        context_prefixes = {w[:5] for w in context_words if len(w) >= 5}
+
         # Get current active set IDs so we don't duplicate
         active_set = set(
             id(r) for r in sorted(
@@ -789,39 +882,62 @@ class AriaMemory:
             )[:self.ACTIVE_SELF_LIMIT]
         )
 
-        # Score all non-active memories by keyword overlap
-        # Use prefix matching (first 5 chars) to handle plurals/conjugations
-        context_prefixes = {w[:5] for w in context_words if len(w) >= 5}
-        scored: list[tuple[float, Reflection]] = []
-        seed_indices: list[int] = []  # for associative chain expansion
-        for idx, ref in enumerate(self.self_reflections):
+        # ── Inverted index lookup: O(k) instead of O(N) ──
+        # Lazy rebuild if index is stale (e.g. memories added externally
+        # or object created via __new__ bypassing __init__)
+        if self.self_reflections and not getattr(self, '_word_index', None):
+            self._word_index: dict[str, set[int]] = {}
+            self._prefix_index: dict[str, set[int]] = {}
+            self._rebuild_index()
+        candidate_indices: set[int] = set()
+        for w in context_words:
+            candidate_indices |= self._word_index.get(w, set())
+        for p in context_prefixes:
+            candidate_indices |= self._prefix_index.get(p, set())
+
+        # Score candidates
+        scored: list[tuple[float, int, Reflection]] = []
+        seed_indices: list[int] = []
+        for idx in candidate_indices:
+            if idx >= len(self.self_reflections):
+                continue
+            ref = self.self_reflections[idx]
             if id(ref) in active_set:
-                continue  # already surfaced normally
+                continue
+
             mem_text = f"{ref.content} {ref.emotion}".lower()
             mem_words = set(re.findall(r"\b[a-zA-Z]{4,}\b", mem_text))
             mem_prefixes = {w[:5] for w in mem_words if len(w) >= 5}
-            # Count matches: exact words + prefix matches for longer words
+
             exact_overlap = len(context_words & mem_words)
             prefix_overlap = len(context_prefixes & mem_prefixes)
             total_overlap = max(exact_overlap, prefix_overlap)
-            if total_overlap >= 2:  # need at least 2 word matches
-                # Score: overlap count + importance bonus
+
+            if total_overlap >= 1:
                 score = total_overlap + (ref.importance * 0.2)
-                scored.append((score, ref))
+                scored.append((score, idx, ref))
                 seed_indices.append(idx)
 
         scored.sort(key=lambda x: x[0], reverse=True)
-        resonant = [ref for _, ref in scored[:n]]
 
-        # Associative chain expansion: walk the memory graph from seed memories
-        # to find conceptually connected memories that didn't match keywords.
-        # Only include associated memories that have at least 1 context-word match
-        # to prevent completely off-topic associations from leaking through.
+        # Dynamic limit: ONLY include candidates above score floor.
+        # No minimum guarantee — the floor alone decides quality.
+        # overlap=1 + imp≥8 scores 2.6+ (passes floor of 2.5)
+        # overlap=1 + imp<8 scores <2.5 (filtered out — too weak)
+        # overlap≥2 + any imp scores ≥2.6 (always passes)
+        resonant: list[Reflection] = []
+        for score, idx, ref in scored:
+            if len(resonant) >= hard_cap:
+                break
+            if score >= self.RESONANCE_SCORE_FLOOR:
+                resonant.append(ref)
+
+        # Associative chain expansion
         if seed_indices:
             associated = self.associate(seed_indices[:5], hops=ASSOCIATION_HOPS)
             resonant_ids = {id(r) for r in resonant} | active_set
             for a in associated:
-                if id(a) not in resonant_ids and len(resonant) < n + 3:
+                if id(a) not in resonant_ids and len(resonant) < hard_cap:
                     a_words = set(re.findall(r"\b[a-zA-Z]{4,}\b",
                                              f"{a.content} {a.emotion}".lower()))
                     a_prefixes = {w[:5] for w in a_words if len(w) >= 5}
@@ -837,13 +953,19 @@ class AriaMemory:
 
     # ─── Context Block (injected into system prompt) ──────────────────
 
-    def get_context_block(self, current_entity: str = "", resonant: list[Reflection] | None = None) -> str:
+    def get_context_block(self, current_entity: str = "", resonant: list[Reflection] | None = None,
+                          conversation_context: str = "") -> str:
         """
         Returns a narrative block to inject into Aria's system prompt.
         Written in first person, like reading from a journal.
         Includes compressed brief (if available) before individual memories.
         Optionally includes resonant memories (old ones triggered by context).
         Now also includes a subtle mood indicator and contradiction flags.
+
+        Foreground/background split: memories relevant to the conversation
+        get full text in the foreground. Irrelevant active memories get
+        shortened one-liners in the background section, reducing prompt
+        tokens while preserving awareness.
         """
         lines = []
 
@@ -866,12 +988,24 @@ class AriaMemory:
                 lines.append(entity_brief)
                 lines.append("")
 
-        active_self = self.get_active_self()
-        if active_self:
-            lines.append("=== THINGS I KNOW ABOUT MYSELF ===")
-            for r in active_self:
+        foreground, background = self.partition_active_self(context=conversation_context)
+        if foreground:
+            # Use focused header only when context-driven split is active
+            if conversation_context and background:
+                lines.append("=== THINGS ON MY MIND RIGHT NOW ===")
+            else:
+                lines.append("=== THINGS I KNOW ABOUT MYSELF ===")
+            for r in foreground:
                 emotion_tag = f" ({r.emotion})" if r.emotion else ""
                 lines.append(f"— {r.content}{emotion_tag}")
+            lines.append("")
+        if background:
+            lines.append("=== THINGS I KNOW ABOUT MYSELF (background) ===")
+            for r in background:
+                # Compressed: just the first ~60 chars + emotion
+                short = r.content[:60].rstrip() + ("…" if len(r.content) > 60 else "")
+                emotion_tag = f" ({r.emotion})" if r.emotion else ""
+                lines.append(f"· {short}{emotion_tag}")
             lines.append("")
 
         if current_entity:
