@@ -245,6 +245,115 @@ Security notes:
   - You cannot mix encrypted and plaintext modes on the same data_dir.
 
 
+MEMORY DREAMING
+---------------
+Between sessions, VividnessMem can "dream" — replaying memories against
+each other to find hidden connections that were never in the same context
+window. It uses the association graph to find 2-hop pairs (memories
+connected through an intermediary but never directly linked).
+
+    from VividnessMem import VividnessMem, DREAM_PROMPT, parse_dream_response
+
+    mem = VividnessMem()
+    session = mem.bump_session()
+
+    # Check if it's time to dream (every DREAM_INTERVAL sessions, default 2)
+    if mem.needs_dream():
+        prompt = mem.prepare_dream_prompt()
+        if prompt:
+            response = your_llm.generate(prompt)
+            connections = parse_dream_response(response)
+            mem.apply_dream(connections)
+            mem.save()
+
+How it works:
+  - find_dream_candidates() walks the association graph 2 hops deep
+    to find memory pairs that share a bridge concept but were never
+    directly co-active.
+  - The LLM receives these pairs and is asked to find hidden connections.
+  - apply_dream() stores each new insight as a memory with source="dream".
+  - Duplicate insights are automatically filtered out.
+  - Dream log is stored in brief data for tracking.
+
+
+REGRET SCORING
+--------------
+When the periodic rescore lowers a memory's importance, VividnessMem
+tracks the "regret" — how much the agent overestimated that memory.
+This builds a picture of what kinds of things the agent tends to
+overrate, enabling metacognitive self-awareness.
+
+Regret is tracked automatically during apply_rescores() — no extra
+API calls needed. The regret context appears in get_context_block()
+once 3+ memories have been flagged.
+
+    # Check regret patterns manually
+    patterns = mem.get_regret_patterns()
+    print(patterns)
+    # {
+    #   "count": 4,
+    #   "avg_original_importance": 8.5,
+    #   "avg_final_importance": 6.0,
+    #   "common_emotions": ["excitement", "surprise"]
+    # }
+
+    # Get the regret context string (empty if < 3 regretted memories)
+    ctx = mem.get_regret_context()
+    # "=== THINGS I'VE LEARNED ABOUT MY OWN JUDGMENT ===\n..."
+
+    # Inspect individual regretted memories
+    for m in mem.get_regret_memories():
+        print(f"regret={m._regret:.2f}  believed={m._believed_importance}  now={m.importance}")
+
+How it works:
+  - When apply_rescores() drops importance (with original >= 5),
+    the memory gets _regret = (original - clamped) / 10.0
+  - _believed_importance preserves the original before correction.
+  - Regret values range from 0.0 to ~0.2 (capped by ±2 adjustment limit).
+  - The regret context section only appears after 3+ flagged memories,
+    preventing noise from isolated corrections.
+
+
+RELATIONSHIP ARC TRACKING
+--------------------------
+VividnessMem tracks per-entity trajectories — not just static social
+impressions but whether each relationship is warming or cooling over
+time. Each add_social_impression() call automatically updates the arc.
+
+    # Arcs update automatically when you add social impressions
+    mem.add_social_impression(
+        entity="Alice",
+        content="Alice challenged my ideas today — tough but fair",
+        emotion="respect",
+        importance=7,
+    )
+
+    # Get the arc for an entity
+    arc = mem.get_relationship_arc("Alice")
+    print(arc)
+    # {
+    #   "trajectory": 0.23,        # EMA of emotion valence (-1 to +1)
+    #   "warmth": 0.15,            # accumulated warmth (-1 to +1)
+    #   "history": [[1, 0.05], [2, 0.15]],  # [session, warmth] over time
+    #   "impression_count": 5,
+    #   "trend_label": "warming"   # warming / cooling / stable
+    # }
+
+    # Get a one-line arc description (used in context block automatically)
+    print(mem.get_arc_context("Alice"))
+    # "(My relationship with Alice feels warm and warming. Trajectory: +0.23)"
+
+How it works:
+  - trajectory is an exponential moving average (alpha=0.35) of
+    emotion valence from each social impression.
+  - warmth accumulates slowly based on trajectory direction,
+    modeling how relationships build or erode over time.
+  - Trend labels: trajectory > 0.15 = "warming", < -0.15 = "cooling",
+    otherwise "stable".
+  - Arc context appears automatically in get_context_block() when
+    the entity has 2+ impressions.
+
+
 KEY CONCEPTS
 ------------
 - Vividness:    importance * retention_curve(age, stability)
@@ -283,6 +392,18 @@ KEY CONCEPTS
 
 - Contradictions: Automatic detection of memories that may conflict
                   (same topic, opposing emotion or negation patterns).
+
+- Dreaming:     Between-session discovery of hidden connections via
+                2-hop association graph traversal. Finds memories that
+                were never co-active but share latent links.
+
+- Regret:       Metacognitive tracking of overestimated importance.
+                When rescoring drops a memory's importance, the original
+                belief is preserved and a regret score is assigned.
+
+- Relationship  Per-entity trajectory tracking. EMA of emotion valence
+  Arcs:         (trajectory) plus accumulated warmth. Automatically
+                labels warming/cooling/stable trends.
 
 
 TUNING

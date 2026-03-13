@@ -94,6 +94,7 @@ BRIEF_FILE = DATA_DIR / "brief.json"
 # ─── Maintenance intervals ─────────────────────────────────────────────────
 BRIEF_INTERVAL = 3      # regenerate compressed brief every N sessions
 RESCORE_INTERVAL = 3    # re-evaluate importance scores every N sessions
+DREAM_INTERVAL = 2      # run memory dreaming every N sessions
 
 # ─── Mood-congruent recall ─────────────────────────────────────────────────
 # Mood dimensions: each ranges -1.0 (negative) to +1.0 (positive)
@@ -206,6 +207,9 @@ class Reflection:
         # Spaced-repetition: track when accesses happened for spacing quality
         self._access_times: list[str] = []
         self._stability: float = INITIAL_STABILITY  # days
+        # Regret scoring: track when importance was overestimated
+        self._regret: float = 0.0
+        self._believed_importance: int = 0
 
     def touch(self):
         """Mark this memory as accessed (keeps it vivid).
@@ -303,6 +307,10 @@ class Reflection:
             d["why_importance"] = self.why_importance
         if self.why_emotion:
             d["why_emotion"] = self.why_emotion
+        regret = getattr(self, "_regret", 0.0)
+        if regret > 0:
+            d["regret"] = round(regret, 3)
+            d["believed_importance"] = getattr(self, "_believed_importance", 0)
         return d
 
     @classmethod
@@ -320,6 +328,8 @@ class Reflection:
         r._access_count = d.get("access_count", 0)
         r._stability = d.get("stability", INITIAL_STABILITY)
         r._access_times = d.get("access_times", [])
+        r._regret = d.get("regret", 0.0)
+        r._believed_importance = d.get("believed_importance", 0)
         return r
 
     def __repr__(self):
@@ -399,6 +409,8 @@ class AriaMemory:
             "self_brief": "",
             "entity_briefs": {},
             "mood": {d: 0.0 for d in MOOD_DIMENSIONS},
+            "relationship_arcs": {},
+            "dream_log": [],
         }
 
         self._load()
@@ -512,8 +524,10 @@ class AriaMemory:
                 if reflection.emotion and len(reflection.emotion) > len(existing.emotion):
                     existing.emotion = reflection.emotion
                 existing.touch()
+                self._update_relationship_arc(entity, reflection.emotion)
                 return
         self.social_impressions[entity].append(reflection)
+        self._update_relationship_arc(entity, reflection.emotion)
 
     # ─── Surface Memories (by vividness, mood-adjusted) ─────────────
 
@@ -925,6 +939,209 @@ class AriaMemory:
                 why_saved="Synthesized from related experiences during memory consolidation",
             ))
 
+    # ─── Memory Dreaming (between-session cross-memory pattern discovery) ──
+
+    def needs_dream(self) -> bool:
+        count = self._brief_data.get("session_count", 0)
+        last = self._brief_data.get("last_dream_session", 0)
+        return count - last >= DREAM_INTERVAL
+
+    def find_dream_candidates(self, max_pairs: int = 5) -> list[tuple[Reflection, Reflection, float]]:
+        """Find pairs of memories that were never co-active but share latent connections."""
+        if len(self.self_reflections) < 4:
+            return []
+        edges = self._build_association_edges()
+        if not edges:
+            return []
+        two_hop: list[tuple[int, int, float]] = []
+        for a_idx, neighbors_a in edges.items():
+            for bridge_idx, w_ab in (neighbors_a if isinstance(neighbors_a, dict) else {n: w for n, w in neighbors_a}).items():
+                bridge_neighbors = edges.get(bridge_idx, {})
+                if isinstance(bridge_neighbors, list):
+                    bridge_neighbors = {n: w for n, w in bridge_neighbors}
+                for c_idx, w_bc in bridge_neighbors.items():
+                    if c_idx != a_idx and c_idx not in (neighbors_a if isinstance(neighbors_a, dict) else {n: w for n, w in neighbors_a}):
+                        strength = (w_ab + w_bc) / 2.0
+                        if a_idx < c_idx:
+                            two_hop.append((a_idx, c_idx, strength))
+        seen: dict[tuple[int, int], float] = {}
+        for a, c, s in two_hop:
+            key = (a, c)
+            if key not in seen or s > seen[key]:
+                seen[key] = s
+        candidates = []
+        for (a_idx, c_idx), strength in seen.items():
+            if a_idx >= len(self.self_reflections) or c_idx >= len(self.self_reflections):
+                continue
+            mem_a = self.self_reflections[a_idx]
+            mem_c = self.self_reflections[c_idx]
+            overlap = _overlap_ratio(_content_words(mem_a.content), _content_words(mem_c.content))
+            if overlap >= 0.25 or (overlap < 0.02 and strength < 3):
+                continue
+            candidates.append((mem_a, mem_c, strength))
+        candidates.sort(key=lambda x: x[2], reverse=True)
+        return candidates[:max_pairs]
+
+    def prepare_dream_prompt(self) -> str:
+        pairs = self.find_dream_candidates()
+        if not pairs:
+            return ""
+        pair_blocks = []
+        for i, (a, b, strength) in enumerate(pairs):
+            tag_a = f" ({a.emotion})" if a.emotion else ""
+            tag_b = f" ({b.emotion})" if b.emotion else ""
+            pair_blocks.append(
+                f"PAIR {i + 1}:\n"
+                f"  Memory A: {a.content}{tag_a}\n"
+                f"  Memory B: {b.content}{tag_b}"
+            )
+        return DREAM_PROMPT.format(pairs="\n\n".join(pair_blocks))
+
+    def apply_dream(self, connections: list[dict]):
+        dream_log = self._brief_data.setdefault("dream_log", [])
+        session = self._brief_data.get("session_count", 0)
+        for c in connections:
+            insight = c.get("insight", "").strip()
+            if not insight or len(insight) < 20:
+                continue
+            new_words = _content_words(insight)
+            is_dup = any(
+                _overlap_ratio(new_words, _content_words(m.content)) >= _DEDUP_THRESHOLD
+                for m in self.self_reflections
+            )
+            if is_dup:
+                continue
+            mem = Reflection(
+                content=insight,
+                emotion=c.get("emotion", "curious"),
+                importance=max(1, min(10, c.get("importance", 5))),
+                source="dream",
+                why_saved="Connection discovered during memory dreaming",
+            )
+            self.self_reflections.append(mem)
+            self._index_memory(len(self.self_reflections) - 1)
+            dream_log.append({
+                "session": session,
+                "insight": insight[:200],
+                "timestamp": datetime.now().isoformat(),
+            })
+        self._brief_data["last_dream_session"] = session
+        if len(dream_log) > 50:
+            self._brief_data["dream_log"] = dream_log[-50:]
+
+    # ─── Regret Scoring ───────────────────────────────────────────────
+
+    def get_regret_memories(self) -> list[Reflection]:
+        return sorted(
+            [m for m in self.self_reflections if getattr(m, "_regret", 0.0) > 0],
+            key=lambda m: m._regret, reverse=True,
+        )
+
+    def get_regret_patterns(self) -> dict:
+        regretted = self.get_regret_memories()
+        if not regretted:
+            return {"count": 0}
+        orig_imps = [m._believed_importance for m in regretted if getattr(m, "_believed_importance", 0) > 0]
+        final_imps = [m.importance for m in regretted]
+        emotion_counts: dict[str, int] = {}
+        for m in regretted:
+            emotion_counts[m.emotion] = emotion_counts.get(m.emotion, 0) + 1
+        return {
+            "count": len(regretted),
+            "avg_original_importance": round(sum(orig_imps) / len(orig_imps), 1) if orig_imps else 0,
+            "avg_final_importance": round(sum(final_imps) / len(final_imps), 1),
+            "common_emotions": sorted(emotion_counts, key=emotion_counts.get, reverse=True)[:3],
+        }
+
+    def get_regret_context(self) -> str:
+        patterns = self.get_regret_patterns()
+        if patterns["count"] < 3:
+            return ""
+        lines = [
+            "=== THINGS I'VE LEARNED ABOUT MY OWN JUDGMENT ===",
+            f"I've overestimated the importance of {patterns['count']} memories.",
+        ]
+        if patterns.get("avg_original_importance") and patterns.get("avg_final_importance"):
+            lines.append(
+                f"On average I rated them {patterns['avg_original_importance']}/10 "
+                f"but they turned out to be more like {patterns['avg_final_importance']}/10."
+            )
+        if patterns.get("common_emotions"):
+            lines.append(
+                f"I tend to overrate memories tagged as: {', '.join(patterns['common_emotions'])}."
+            )
+        return "\n".join(lines)
+
+    # ─── Relationship Arc Tracking ────────────────────────────────────
+
+    def _update_relationship_arc(self, entity: str, emotion: str):
+        arcs = self._brief_data.setdefault("relationship_arcs", {})
+        session = self._brief_data.get("session_count", 0)
+        if entity not in arcs:
+            arcs[entity] = {
+                "trajectory": 0.0,
+                "warmth": 0.0,
+                "history": [],
+                "impression_count": 0,
+            }
+        arc = arcs[entity]
+        vec = _emotion_to_vector(emotion)
+        valence = vec[0] if vec else 0.0
+        old_traj = arc["trajectory"]
+        alpha = 0.35
+        new_traj = old_traj * (1 - alpha) + valence * alpha
+        arc["trajectory"] = round(max(-1.0, min(1.0, new_traj)), 4)
+        old_warmth = arc["warmth"]
+        warmth_nudge = 0.1 * arc["trajectory"]
+        arc["warmth"] = round(max(-1.0, min(1.0, old_warmth + warmth_nudge)), 4)
+        arc["impression_count"] = arc.get("impression_count", 0) + 1
+        history = arc["history"]
+        if history and history[-1][0] == session:
+            history[-1] = [session, arc["warmth"]]
+        else:
+            history.append([session, arc["warmth"]])
+        if len(history) > 100:
+            arc["history"] = history[-100:]
+
+    def get_relationship_arc(self, entity: str) -> dict | None:
+        arcs = self._brief_data.get("relationship_arcs", {})
+        if entity not in arcs:
+            return None
+        arc = dict(arcs[entity])
+        t = arc["trajectory"]
+        if t > 0.15:
+            arc["trend_label"] = "warming"
+        elif t < -0.15:
+            arc["trend_label"] = "cooling"
+        else:
+            arc["trend_label"] = "stable"
+        return arc
+
+    def get_arc_context(self, entity: str) -> str:
+        arc = self.get_relationship_arc(entity)
+        if not arc or arc["impression_count"] < 2:
+            return ""
+        w = arc["warmth"]
+        warmth_word = (
+            "very warm" if w > 0.5 else
+            "warm" if w > 0.2 else
+            "cool" if w < -0.2 else
+            "cold" if w < -0.5 else
+            "neutral"
+        )
+        trend = arc["trend_label"]
+        history = arc.get("history", [])
+        since_text = ""
+        if len(history) >= 2:
+            for i in range(len(history) - 1, 0, -1):
+                if (history[i][1] - history[i - 1][1]) * arc["trajectory"] < 0:
+                    since_text = f" since session {history[i][0]}"
+                    break
+        return (
+            f"(My relationship with {entity} feels {warmth_word} and {trend}{since_text}. "
+            f"Trajectory: {arc['trajectory']:+.2f})"
+        )
+
     # ─── Resonance (old memories resurfacing) ─────────────────────────
 
     def resonate(self, context: str, limit: int | None = None) -> list[Reflection]:
@@ -1092,6 +1309,9 @@ class AriaMemory:
             active_social = self.get_active_social(current_entity)
             if active_social:
                 lines.append(f"=== MY IMPRESSIONS OF {current_entity.upper()} ===")
+                arc_ctx = self.get_arc_context(current_entity)
+                if arc_ctx:
+                    lines.append(arc_ctx)
                 for r in active_social:
                     emotion_tag = f" ({r.emotion})" if r.emotion else ""
                     lines.append(f"— {r.content}{emotion_tag}")
@@ -1108,6 +1328,11 @@ class AriaMemory:
         contradiction_ctx = self.get_contradiction_context()
         if contradiction_ctx:
             lines.append(contradiction_ctx)
+            lines.append("")
+
+        regret_ctx = self.get_regret_context()
+        if regret_ctx:
+            lines.append(regret_ctx)
             lines.append("")
 
         return "\n".join(lines) if lines else ""
@@ -1172,6 +1397,7 @@ class AriaMemory:
     # ─── Stats ────────────────────────────────────────────────────────
 
     def stats(self) -> dict:
+        arcs = self._brief_data.get("relationship_arcs", {})
         return {
             "total_self_reflections": len(self.self_reflections),
             "active_self": len(self.get_active_self()),
@@ -1179,6 +1405,10 @@ class AriaMemory:
             "total_social": sum(len(v) for v in self.social_impressions.values()),
             "session_count": self._brief_data.get("session_count", 0),
             "has_brief": bool(self._brief_data.get("self_brief")),
+            "regret_count": len(self.get_regret_memories()),
+            "dream_count": len(self._brief_data.get("dream_log", [])),
+            "tracked_arcs": {e: self.get_relationship_arc(e).get("trend_label", "stable")
+                             for e in arcs if self.get_relationship_arc(e)},
         }
 
     # ─── Brief & Maintenance ──────────────────────────────────────────
@@ -1328,8 +1558,16 @@ class AriaMemory:
                 continue
             new_imp = max(1, min(10, int(new_imp)))
             ref = indexed_memories[idx]
+            original = ref.importance
             # Enforce conservative ±2 adjustment
             clamped = max(ref.importance - 2, min(ref.importance + 2, new_imp))
+            # Regret tracking: if importance drops, record the overestimation
+            if clamped < original and original >= 5:
+                drop = original - clamped
+                regret = drop / 10.0
+                ref._regret = max(getattr(ref, "_regret", 0.0), regret)
+                if getattr(ref, "_believed_importance", 0) == 0:
+                    ref._believed_importance = original
             ref.importance = clamped
             # Emotional reappraisal — update emotion if LLM suggests it
             new_emotion = adj.get("new_emotion")
@@ -1504,6 +1742,42 @@ Return a JSON array of gist memories:
 ```
 
 Return ONLY the JSON array. Return [] if no clusters warrant consolidation."""
+
+
+DREAM_PROMPT = """You're dreaming. Not literally — but between sessions, your memory
+is replaying. Below are pairs of memories that were NEVER in the same
+conversation, but share a hidden connection through intermediate memories.
+
+Your job: look at each pair and ask "what do these two experiences have
+in common that I never noticed before?" The connection might be:
+- A shared emotional undercurrent
+- A pattern you're repeating without realising
+- An insight that only emerges when you see both memories side by side
+- A contradiction you hadn't spotted
+- A cause-and-effect you missed in real time
+
+{pairs}
+
+For each pair where you see a genuine connection, write a dream insight:
+
+```json
+[
+  {{"insight": "I just realised that my frustration with X is actually the same feeling as...", "emotion": "curious", "importance": 5}}
+]
+```
+
+Rules:
+- Only write insights for pairs where you genuinely see a connection
+- Write naturally, in first person, like waking up with a new thought
+- Importance 3-7 (dreams are interesting but need real-world validation)
+- Return [] if no pairs spark anything genuine
+
+Return ONLY the JSON array."""
+
+
+def parse_dream_response(response: str) -> list[dict]:
+    """Parse the LLM's dream response into connection entries."""
+    return parse_curation_response(response)
 
 
 def parse_brief_response(response: str) -> dict:
