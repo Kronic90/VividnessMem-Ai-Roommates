@@ -97,57 +97,78 @@ All test code and results are in the [`tests/`](tests/) directory:
 
 ## Benchmarked: VividnessMem vs RAG vs MemGPT
 
-We built a comprehensive benchmark suite to answer the question honestly: **is VividnessMem actually better than standard approaches?** All three systems receive identical memories, identical queries, and identical test conditions. No LLM is used in the benchmark — this is a pure memory-system comparison.
+We built a 6-test benchmark to answer the question honestly: **does VividnessMem add anything over standard approaches?** All three systems receive identical memories, identical queries, and identical test conditions. No LLM is used — this is a pure memory-system comparison. Results are averaged across 3 random seeds for stability.
 
 The baselines:
 - **RAG** — TF-IDF cosine similarity retrieval (standard vector-search approach)
 - **MemGPT** — Core/archival split with importance threshold routing and keyword search
 - **VividnessMem** — Our organic system (vividness ranking + resonance + associative chains)
 
-### Composite Score
+### Section A: Core Retrieval — Raw Metrics
 
-| System | Score | Grade |
-|---|---|---|
-| **VividnessMem** | **79.9** | **B** |
-| MemGPT | 56.6 | D |
-| RAG | 54.5 | D |
+These numbers stand on their own, without weighting or composite scoring.
 
-Weighted: Accuracy 50%, Memory Efficiency 15%, Contradiction Detection 10%, Retrieval Scalability 15%, Prompt Token Stability 10%.
-
-### Retrieval Accuracy — All Three Tied
+**Retrieval accuracy is essentially equal:**
 
 | Test | VividnessMem | RAG | MemGPT |
 |---|---|---|---|
-| Long-term Recall (100-day gap, 200 fillers) | 5/5 direct, 5/5 resonance | 5/5, 5/5 | 5/5, 5/5 |
-| Dormant Memory (200 days, 200 interactions) | Found all 3 ways | Found all 3 ways | Found all 3 ways |
-| Contradiction Handling (3 pairs) | 3/3 latest correct | 3/3 | 3/3 |
-| Context Pollution (5 needles in 1000) | 4/5 direct, 5/5 resonance | 4/5, 5/5 | 5/5, 5/5 |
-| Identity Stability (6 traits + 500 fillers) | 3/6 direct, 4/6 resonance | 3/6, 4/6 | 2/6, 2/6 |
+| Long-term Recall (100-day gap, 200 fillers) | 100% | 100% | 100% |
+| Dormant Memory (200 days, 200 interactions) | 100% | 100% | 100% |
+| Contradiction Handling (3 pairs) | 100% | 100% | 100% |
+| Context Pollution (5 needles in 1000) | 90% | 90% | 100% |
+| Identity Stability (6 traits + 500 fillers) | 58% | 58% | 33% |
+| **Overall (weighted)** | **89.7%** | **89.7%** | **86.7%** |
 
-**Retrieval accuracy is essentially equal** across all three systems (VividnessMem 89.7%, RAG 89.7%, MemGPT 86.7%). VividnessMem doesn't win by finding more memories — it wins on everything else.
+VividnessMem and RAG are tied on recall accuracy. MemGPT leads on context pollution (100%) but trails on identity stability (33%). All three score A- overall.
 
-### Where VividnessMem Pulls Ahead
+**Latency and tokens:**
 
-**80% memory compression.** VividnessMem's soft deduplication reduces 1,005 input memories to 201 stored — keeping only unique content. RAG and MemGPT store all 1,005.
+| Metric | VividnessMem | RAG | MemGPT |
+|---|---|---|---|
+| Latency @100 memories | 1.8ms | 1.1ms | **0.1ms** |
+| Latency @5000 memories | 3.4ms (x1.9) | 53.6ms (x49) | 5.3ms (x42) |
+| Prompt tokens @100 | 184 | 174 | **79** |
+| Prompt tokens @5000 | 185 | 165 | 78 |
+| False recalls (long-term) | 28 | **26** | 32 |
+| False recalls (pollution) | 36 | 29 | **23** |
+
+MemGPT has the lowest raw latency and smallest prompt footprint. VividnessMem has the worst false-recall rate. These are real tradeoffs.
+
+### Section B: Memory Management Features
+
+These are architectural capabilities. RAG and MemGPT are simpler designs that weren't built to offer these features — this section documents what VividnessMem adds beyond raw retrieval, not a claim that other systems "fail."
+
+**Memory compression:**
 
 | Input | VividnessMem stored | RAG stored | MemGPT stored |
 |---|---|---|---|
-| 205 memories | 201 | 205 | 205 |
-| 1,005 memories | 201 | 1,005 | 1,005 |
-| 506 memories | 202 | 506 | 506 |
+| 205 memories | 201 (2% compressed) | 205 | 205 |
+| 1,005 memories | 201 (80% compressed) | 1,005 | 1,005 |
+| 506 memories | 202 (60% compressed) | 506 | 506 |
 
-**Contradiction detection.** Only VividnessMem can detect that a memory contradicts a previous one. RAG and MemGPT have no mechanism for this — they'll happily serve you both "my favourite colour is blue" and "my favourite colour is green" without noticing.
+VividnessMem's soft deduplication keeps only unique content. This is why retrieval scales flat — the working set stays small regardless of input volume.
 
-**Retrieval scales flat.** As memory count grows from 100 to 5,000:
+**Contradiction detection:** VividnessMem detected 1/3 planted contradictions. RAG and MemGPT have no contradiction detector — this is an apples-to-oranges comparison and scored separately for that reason.
 
-| Scale | VividnessMem | RAG | MemGPT |
-|---|---|---|---|
-| 100 memories | 1.6ms | 1.0ms | 0.1ms |
-| 5,000 memories | 3.3ms (x2.1) | 50.3ms (x50) | 4.5ms (x40) |
+**Retrieval scaling:** VividnessMem degrades 1.9x from 100→5000 memories. RAG degrades 49x. MemGPT degrades 42x.
 
-VividnessMem's retrieval time barely changes because dedup keeps the working set small. RAG degrades 50x at scale.
+### Section C: Composite Score (Weighted Utility Preference)
 
-**Constant prompt tokens.** VividnessMem injects 185 tokens into the LLM prompt regardless of whether the system holds 100 or 5,000 memories. The context window stays bounded and predictable.
+> **Note:** This composite reflects a **chosen weighting** that values memory-management capabilities. Different weights would yield different rankings. Sections A and B above are the primary evidence.
+
+Weights: Accuracy 50%, Efficiency 15%, Contradictions 10%, Scalability 15%, Tokens 10%.
+
+| System | Score | Grade |
+|---|---|---|
+| **VividnessMem** | **76.6** | **B** |
+| MemGPT | 56.0 | D |
+| RAG | 54.8 | D |
+
+### Methodology Notes
+
+- All results averaged across 3 random seeds (42, 137, 2024). Standard deviations were 0.0 for accuracy metrics indicating stable results independent of filler ordering.
+- The benchmark went through 4 iterations (v1–v4). See the [bugfix history](benchmarks/benchmark_memory_systems.py) in the benchmark file header for full transparency on what changed and why.
+- The adapter wrapping VividnessMem is non-mutating: `retrieve()` does not call `touch()` or modify mood state, matching how read-only retrieval works in practice.
 
 ### Benchmark Files
 
@@ -156,8 +177,8 @@ All benchmark code and results are in [`benchmarks/`](benchmarks/):
 | File | Description |
 |---|---|
 | `baseline_memory_systems.py` | Fair implementations of RAG (TF-IDF) and MemGPT (core/archival) baselines, plus VividnessMem adapter |
-| `benchmark_memory_systems.py` | 6-test benchmark suite with composite scoring |
-| `benchmark_results.json` | Raw results from last run |
+| `benchmark_memory_systems.py` | 6-test benchmark suite v4 with A/B/C scoring sections |
+| `benchmark_results.json` | Raw results from last run (includes per-seed data) |
 | `benchmark_report.txt` | Human-readable full report |
 
 ## How the Organic Memory Works

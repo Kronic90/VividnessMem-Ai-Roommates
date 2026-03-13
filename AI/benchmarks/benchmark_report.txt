@@ -1,5 +1,6 @@
-VividnessMem BENCHMARK REPORT v3
-Generated: 2026-03-13 16:03:27
+VividnessMem BENCHMARK REPORT v4
+Generated: 2026-03-13 16:55:20
+Seeds: [42, 137, 2024]
 
 ==========================================================================================
   BENCHMARK RESULTS: VividnessMem vs RAG vs MemGPT
@@ -8,157 +9,241 @@ Generated: 2026-03-13 16:03:27
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   TEST: 1. Long-term Recall (100 days)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-  Metric                             VividnessMem        RAG                 MemGPT              
+  Metric                             MemGPT              VividnessMem        RAG                 
   -----------------------------------------------------------------------------------------------
   context_relevance                  1.000               1.000               1.000               
+  context_relevance_std              0.000               0.000               0.000               
   direct_accuracy                    1.000               1.000               1.000               
-  false_recalls_total                28                  26                  32                  
-  memories_stored                    201                 205                 205                 
-  prompt_tokens                      154                 147                 161                 
+  direct_accuracy_std                0.000               0.000               0.000               
+  false_recalls_total                32.000              28.000              26.000              
+  false_recalls_total_std            0.000               0.000               0.000               
+  memories_stored                    205.000             201.000             205.000             
+  memories_stored_std                0.000               0.000               0.000               
+  prompt_tokens                      162.333             154.000             148.667             
+  prompt_tokens_std                  0.943               0.000               1.700               
   resonance_accuracy                 1.000               1.000               1.000               
+  resonance_accuracy_std             0.000               0.000               0.000               
 
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   TEST: 2. Dormant Memory (200 days)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-  Metric                             VividnessMem        RAG                 MemGPT              
+  Metric                             MemGPT              VividnessMem        RAG                 
   -----------------------------------------------------------------------------------------------
-  direct_found                       True                True                True                
-  direct_rank                        3                   1                   1                   
-  dormant_vividness                  4.200               N/A                 N/A                 
-  false_recalls                      7                   9                   3                   
-  in_context_block                   True                True                True                
-  indirect_found                     True                True                True                
-  memories_stored                    197                 201                 201                 
-  resonance_found                    True                True                True                
+  direct_found                       1.000               1.000               1.000               
+  direct_found_std                   0.000               0.000               0.000               
+  direct_rank                        1.000               3.000               1.000               
+  direct_rank_std                    0.000               0.000               0.000               
+  dormant_vividness                  N/A                 4.200               N/A                 
+  dormant_vividness_std              N/A                 0.000               N/A                 
+  false_recalls                      3.000               7.000               9.000               
+  false_recalls_std                  0.000               0.000               0.000               
+  in_context_block                   1.000               1.000               1.000               
+  in_context_block_std               0.000               0.000               0.000               
+  indirect_found                     1.000               1.000               1.000               
+  indirect_found_std                 0.000               0.000               0.000               
+  memories_stored                    201.000             197.000             201.000             
+  memories_stored_std                0.000               0.000               0.000               
+  resonance_found                    1.000               1.000               1.000               
+  resonance_found_std                0.000               0.000               0.000               
 
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   TEST: 3. Contradiction Handling
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-  Metric                             VividnessMem        RAG                 MemGPT              
+  Metric                             MemGPT              VividnessMem        RAG                 
   -----------------------------------------------------------------------------------------------
-  contradictions_detected            1                   N/A                 N/A                 
+  contradictions_detected            N/A                 1.000               N/A                 
+  contradictions_detected_std        N/A                 0.000               N/A                 
   latest_accuracy                    1.000               1.000               1.000               
-  surfaces_both                      3                   3                   3                   
-  total_pairs                        3                   3                   3                   
+  latest_accuracy_std                0.000               0.000               0.000               
+  surfaces_both                      3.000               3.000               3.000               
+  surfaces_both_std                  0.000               0.000               0.000               
+  total_pairs                        3.000               3.000               3.000               
+  total_pairs_std                    0.000               0.000               0.000               
 
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   TEST: 4. Context Pollution (1005 memories)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-  Metric                             VividnessMem        RAG                 MemGPT              
+  Metric                             MemGPT              VividnessMem        RAG                 
   -----------------------------------------------------------------------------------------------
-  avg_prompt_tokens                  230                 171                 191                 
-  avg_retrieval_ms                   4.630               9.240               0.420               
-  context_focus                      0.600               0.600               1.000               
-  direct_accuracy                    0.800               0.800               1.000               
-  false_recalls_total                36                  29                  23                  
-  memories_stored                    201                 1005                1005                
+  avg_prompt_tokens                  192.333             231.000             171.667             
+  avg_prompt_tokens_std              0.943               2.944               0.471               
+  avg_retrieval_ms                   0.477               6.010               10.070              
+  avg_retrieval_ms_std               0.009               0.785               0.043               
+  context_focus                      1.000               0.467               0.600               
+  context_focus_std                  0.000               0.094               0.000               
+  direct_accuracy                    1.000               0.800               0.800               
+  direct_accuracy_std                0.000               0.000               0.000               
+  false_recalls_total                23.000              36.000              29.000              
+  false_recalls_total_std            0.000               0.000               0.000               
+  memories_stored                    1005.000            201.000             1005.000            
+  memories_stored_std                0.000               0.000               0.000               
   resonance_accuracy                 1.000               1.000               1.000               
+  resonance_accuracy_std             0.000               0.000               0.000               
 
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   TEST: 5. Identity Stability (500 interactions)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-  Metric                             VividnessMem        RAG                 MemGPT              
+  Metric                             MemGPT              VividnessMem        RAG                 
   -----------------------------------------------------------------------------------------------
-  memories_stored                    202                 506                 506                 
-  trait_accuracy                     0.500               0.500               0.333               
-  trait_resonance_accuracy           0.667               0.667               0.333               
-  traits_found                       3                   3                   2                   
-  traits_in_context                  2                   2                   3                   
+  memories_stored                    506.000             202.000             506.000             
+  memories_stored_std                0.000               0.000               0.000               
+  trait_accuracy                     0.333               0.500               0.500               
+  trait_accuracy_std                 0.000               0.000               0.000               
+  trait_resonance_accuracy           0.333               0.667               0.667               
+  trait_resonance_accuracy_std       0.000               0.000               0.000               
+  traits_found                       2.000               3.000               3.000               
+  traits_found_std                   0.000               0.000               0.000               
+  traits_in_context                  3.000               2.000               2.000               
+  traits_in_context_std              0.000               0.000               0.000               
 
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   TEST: 6. Performance (n=100)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-  Metric                             VividnessMem        RAG                 MemGPT              
+  Metric                             MemGPT              VividnessMem        RAG                 
   -----------------------------------------------------------------------------------------------
-  avg_retrieval_ms                   1.590               1.010               0.110               
-  memories_stored                    99                  100                 100                 
-  prompt_tokens                      184                 174                 77                  
+  avg_retrieval_ms                   0.127               1.673               1.080               
+  avg_retrieval_ms_std               0.009               0.039               0.022               
+  memories_stored                    100.000             99.000              100.000             
+  memories_stored_std                0.000               0.000               0.000               
+  prompt_tokens                      79.000              184.000             174.000             
+  prompt_tokens_std                  0.816               0.000               0.000               
 
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   TEST: 6. Performance (n=500)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-  Metric                             VividnessMem        RAG                 MemGPT              
+  Metric                             MemGPT              VividnessMem        RAG                 
   -----------------------------------------------------------------------------------------------
-  avg_retrieval_ms                   3.090               4.950               0.460               
-  memories_stored                    196                 500                 500                 
-  prompt_tokens                      185                 165                 77                  
+  avg_retrieval_ms                   0.540               3.353               5.310               
+  avg_retrieval_ms_std               0.008               0.048               0.078               
+  memories_stored                    500.000             196.000             500.000             
+  memories_stored_std                0.000               0.000               0.000               
+  prompt_tokens                      78.667              183.333             165.000             
+  prompt_tokens_std                  0.471               2.055               0.000               
 
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   TEST: 6. Performance (n=1000)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-  Metric                             VividnessMem        RAG                 MemGPT              
+  Metric                             MemGPT              VividnessMem        RAG                 
   -----------------------------------------------------------------------------------------------
-  avg_retrieval_ms                   3.080               9.740               0.930               
-  memories_stored                    196                 1000                1000                
-  prompt_tokens                      185                 165                 77                  
+  avg_retrieval_ms                   1.047               3.440               10.580              
+  avg_retrieval_ms_std               0.005               0.042               0.086               
+  memories_stored                    1000.000            196.000             1000.000            
+  memories_stored_std                0.000               0.000               0.000               
+  prompt_tokens                      78.667              183.000             165.000             
+  prompt_tokens_std                  0.943               1.633               0.000               
 
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   TEST: 6. Performance (n=2000)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-  Metric                             VividnessMem        RAG                 MemGPT              
+  Metric                             MemGPT              VividnessMem        RAG                 
   -----------------------------------------------------------------------------------------------
-  avg_retrieval_ms                   3.200               19.500              1.820               
-  memories_stored                    196                 2000                2000                
-  prompt_tokens                      185                 165                 77                  
+  avg_retrieval_ms                   2.127               3.310               21.047              
+  avg_retrieval_ms_std               0.012               0.016               0.025               
+  memories_stored                    2000.000            196.000             2000.000            
+  memories_stored_std                0.000               0.000               0.000               
+  prompt_tokens                      78.667              183.333             165.000             
+  prompt_tokens_std                  0.943               3.091               0.000               
 
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
   TEST: 6. Performance (n=5000)
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-  Metric                             VividnessMem        RAG                 MemGPT              
+  Metric                             MemGPT              VividnessMem        RAG                 
   -----------------------------------------------------------------------------------------------
-  avg_retrieval_ms                   3.280               50.220              4.460               
-  memories_stored                    196                 5000                5000                
-  prompt_tokens                      185                 165                 77                  
+  avg_retrieval_ms                   5.400               3.393               53.420              
+  avg_retrieval_ms_std               0.059               0.061               0.131               
+  memories_stored                    5000.000            196.000             5000.000            
+  memories_stored_std                0.000               0.000               0.000               
+  prompt_tokens                      78.333              185.000             165.000             
+  prompt_tokens_std                  0.471               2.944               0.000               
 
 ==========================================================================================
 
 ==========================================================================================
-  AGGREGATE SCORES
+  SECTION A: CORE RETRIEVAL — Raw Metrics
+  (No weighting. If a system loses, it shows.)
 ==========================================================================================
 
-  1) Retrieval Accuracy (0-100):
+  A1) Retrieval Accuracy by Test:
+  Test                                          VividnessMem    RAG             MemGPT         
+  ----------------------------------------------------------------------------------------
+  Long-term Recall (100 days)                   100%          100%          100%          
+  Dormant Memory (200 days)                     100%          100%          100%          
+  Contradiction Handling                        100%          100%          100%          
+  Context Pollution (1005 memories)             90%          90%          100%          
+  Identity Stability (500 interactions)         58%          58%          33%          
+
+  Overall Retrieval Accuracy (weighted across tests):
+  System               Score      Pct        Grade
+  --------------------------------------------------
+  VividnessMem         89.7       89.7       A-
+  RAG                  89.7       89.7       A-
+  MemGPT               86.7       86.7       A-
+
+  A2) Retrieval Latency (ms):
+  System               @100 mems       @5000 mems      Slowdown    
+  ------------------------------------------------------------
+  VividnessMem         1.7             3.4             x2.0
+  RAG                  1.1             53.4            x49.5
+  MemGPT               0.1             5.4             x42.6
+
+  A3) Prompt Tokens Injected:
+  System               @100 mems       @5000 mems      Ratio     
+  ----------------------------------------------------------
+  VividnessMem         184             185             1.01
+  RAG                  174             165             0.95
+  MemGPT               79              78              0.99
+
+  A4) False Recalls (lower is better):
+    Long-term Recall (100 days): VividnessMem=28.0, RAG=26.0, MemGPT=32.0
+    Context Pollution (1005 memories): VividnessMem=36.0, RAG=29.0, MemGPT=23.0
+
+  Section A Verdict:
+  Retrieval accuracy is statistically equal across all systems.
+  See latency and token counts for operational differences.
+
+==========================================================================================
+  SECTION B: MEMORY MANAGEMENT FEATURES
+  (Architectural capabilities — not all systems are designed for these.)
+  (RAG and MemGPT are simpler designs that prioritize other tradeoffs.)
+==========================================================================================
+
+  B1) Memory Compression (stored vs input):
+    205 input → VividnessMem=201.0 (2% compressed), RAG=205.0 (0% compressed), MemGPT=205.0 (0% compressed)
+    1005 input → VividnessMem=201.0 (80% compressed), RAG=1005.0 (0% compressed), MemGPT=1005.0 (0% compressed)
+    506 input → VividnessMem=202.0 (60% compressed), RAG=506.0 (0% compressed), MemGPT=506.0 (0% compressed)
+
+  B2) Contradiction Detection:
+    VividnessMem         detected 1/3
+    RAG                  (feature not present)
+    MemGPT               (feature not present)
+    Note: Only VividnessMem has a contradiction detector.
+    RAG/MemGPT are not designed for this — it is an apples-to-oranges metric.
+
+  B3) Retrieval Scalability (100 → 5000 memories):
+    VividnessMem         1.7ms → 3.4ms (x2.0 slowdown)
+    RAG                  1.1ms → 53.4ms (x49.5 slowdown)
+    MemGPT               0.1ms → 5.4ms (x42.6 slowdown)
+    VividnessMem scales flat because dedup keeps the working set small.
+
+  B4) Prompt Token Stability (100 → 5000 memories):
+    VividnessMem         184 → 185 tokens (ratio: 1.01)
+    RAG                  174 → 165 tokens (ratio: 0.95)
+    MemGPT               79 → 78 tokens (ratio: 0.99)
+
+==========================================================================================
+  SECTION C: COMPOSITE SCORE — Weighted Utility Preference
+  NOTE: This composite reflects a CHOSEN weighting that values memory-
+  management capabilities. Different weights yield different rankings.
+  The raw metrics in Sections A and B are the primary evidence.
+==========================================================================================
+  Weights: Accuracy 50%, Efficiency 15%, Contradictions 10%, Scalability 15%, Tokens 10%
+
   System               Score      Grade
   ---------------------------------------------
-  VividnessMem         89.7       A-
-  RAG                  89.7       A-
-  MemGPT               86.7       A-
-
-  2) Memory Efficiency:
-  System               Compression %       
-  ----------------------------------------
-  VividnessMem         47.3%
-  RAG                  0.0%
-  MemGPT               0.0%
-
-  3) Contradiction Detection:
-  VividnessMem         detected=1
-  RAG                  detected=N/A
-  MemGPT               detected=N/A
-
-  4) Retrieval Scalability (ms at 100 vs 5000 memories):
-  VividnessMem         1.6ms -> 3.3ms (x2.1 slowdown)
-  RAG                  1.0ms -> 50.2ms (x49.7 slowdown)
-  MemGPT               0.1ms -> 4.5ms (x40.5 slowdown)
-
-  5) Prompt Token Stability (tokens at 100 vs 5000):
-  VividnessMem         184 -> 185 tokens (ratio: 1.01)
-  RAG                  174 -> 165 tokens (ratio: 0.95)
-  MemGPT               77 -> 77 tokens (ratio: 1.00)
-
-  ======================================================================
-  COMPOSITE SCORE (Accuracy 50%, Efficiency 15%, Contradictions 10%, Scalability 15%, Tokens 10%)
-  ======================================================================
-  System               Score      Grade
-  ---------------------------------------------
-  VividnessMem         79.9       B
-  MemGPT               56.5       D
-  RAG                  54.7       D
-
-  Memory Compression (stored vs input):
-    205 input: VividnessMem=201, RAG=205, MemGPT=205
-    1005 input: VividnessMem=201, RAG=1005, MemGPT=1005
-    506 input: VividnessMem=202, RAG=506, MemGPT=506
+  VividnessMem         76.6       B
+  MemGPT               55.8       D
+  RAG                  54.8       D
 
 ==========================================================================================
 
-Total time: 9.4s
+Total time: 29.6s
