@@ -18,5 +18,7 @@
 !LICENSE
 !tests/
 !tests/**
+!benchmarks/
+!benchmarks/**
 !memory_snapshots/
 !memory_snapshots/**

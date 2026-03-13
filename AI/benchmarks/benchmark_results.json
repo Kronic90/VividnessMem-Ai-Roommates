@@ -1,0 +1,221 @@
+{
+  "timestamp": "2026-03-13T16:03:27.536126",
+  "elapsed_seconds": 9.35,
+  "results": {
+    "1. Long-term Recall (100 days)": {
+      "VividnessMem": {
+        "direct_accuracy": 1.0,
+        "resonance_accuracy": 1.0,
+        "context_relevance": 1.0,
+        "false_recalls_total": 28,
+        "memories_stored": 201,
+        "prompt_tokens": 154
+      },
+      "RAG": {
+        "direct_accuracy": 1.0,
+        "resonance_accuracy": 1.0,
+        "context_relevance": 1.0,
+        "false_recalls_total": 26,
+        "memories_stored": 205,
+        "prompt_tokens": 147
+      },
+      "MemGPT": {
+        "direct_accuracy": 1.0,
+        "resonance_accuracy": 1.0,
+        "context_relevance": 1.0,
+        "false_recalls_total": 32,
+        "memories_stored": 205,
+        "prompt_tokens": 161
+      }
+    },
+    "2. Dormant Memory (200 days)": {
+      "VividnessMem": {
+        "direct_found": true,
+        "direct_rank": 3,
+        "resonance_found": true,
+        "indirect_found": true,
+        "in_context_block": true,
+        "false_recalls": 7,
+        "dormant_vividness": 4.2,
+        "memories_stored": 197
+      },
+      "RAG": {
+        "direct_found": true,
+        "direct_rank": 1,
+        "resonance_found": true,
+        "indirect_found": true,
+        "in_context_block": true,
+        "false_recalls": 9,
+        "dormant_vividness": "N/A",
+        "memories_stored": 201
+      },
+      "MemGPT": {
+        "direct_found": true,
+        "direct_rank": 1,
+        "resonance_found": true,
+        "indirect_found": true,
+        "in_context_block": true,
+        "false_recalls": 3,
+        "dormant_vividness": "N/A",
+        "memories_stored": 201
+      }
+    },
+    "3. Contradiction Handling": {
+      "VividnessMem": {
+        "latest_accuracy": 1.0,
+        "surfaces_both": 3,
+        "total_pairs": 3,
+        "contradictions_detected": 1
+      },
+      "RAG": {
+        "latest_accuracy": 1.0,
+        "surfaces_both": 3,
+        "total_pairs": 3,
+        "contradictions_detected": "N/A"
+      },
+      "MemGPT": {
+        "latest_accuracy": 1.0,
+        "surfaces_both": 3,
+        "total_pairs": 3,
+        "contradictions_detected": "N/A"
+      }
+    },
+    "4. Context Pollution (1005 memories)": {
+      "VividnessMem": {
+        "direct_accuracy": 0.8,
+        "resonance_accuracy": 1.0,
+        "context_focus": 0.6,
+        "false_recalls_total": 36,
+        "avg_retrieval_ms": 4.63,
+        "avg_prompt_tokens": 230,
+        "memories_stored": 201
+      },
+      "RAG": {
+        "direct_accuracy": 0.8,
+        "resonance_accuracy": 1.0,
+        "context_focus": 0.6,
+        "false_recalls_total": 29,
+        "avg_retrieval_ms": 9.24,
+        "avg_prompt_tokens": 171,
+        "memories_stored": 1005
+      },
+      "MemGPT": {
+        "direct_accuracy": 1.0,
+        "resonance_accuracy": 1.0,
+        "context_focus": 1.0,
+        "false_recalls_total": 23,
+        "avg_retrieval_ms": 0.42,
+        "avg_prompt_tokens": 191,
+        "memories_stored": 1005
+      }
+    },
+    "5. Identity Stability (500 interactions)": {
+      "VividnessMem": {
+        "trait_accuracy": 0.5,
+        "trait_resonance_accuracy": 0.6666666666666666,
+        "traits_found": 3,
+        "traits_in_context": 2,
+        "memories_stored": 202
+      },
+      "RAG": {
+        "trait_accuracy": 0.5,
+        "trait_resonance_accuracy": 0.6666666666666666,
+        "traits_found": 3,
+        "traits_in_context": 2,
+        "memories_stored": 506
+      },
+      "MemGPT": {
+        "trait_accuracy": 0.3333333333333333,
+        "trait_resonance_accuracy": 0.3333333333333333,
+        "traits_found": 2,
+        "traits_in_context": 3,
+        "memories_stored": 506
+      }
+    },
+    "6. Performance (n=100)": {
+      "VividnessMem": {
+        "avg_retrieval_ms": 1.59,
+        "prompt_tokens": 184,
+        "memories_stored": 99
+      },
+      "RAG": {
+        "avg_retrieval_ms": 1.01,
+        "prompt_tokens": 174,
+        "memories_stored": 100
+      },
+      "MemGPT": {
+        "avg_retrieval_ms": 0.11,
+        "prompt_tokens": 77,
+        "memories_stored": 100
+      }
+    },
+    "6. Performance (n=500)": {
+      "VividnessMem": {
+        "avg_retrieval_ms": 3.09,
+        "prompt_tokens": 185,
+        "memories_stored": 196
+      },
+      "RAG": {
+        "avg_retrieval_ms": 4.95,
+        "prompt_tokens": 165,
+        "memories_stored": 500
+      },
+      "MemGPT": {
+        "avg_retrieval_ms": 0.46,
+        "prompt_tokens": 77,
+        "memories_stored": 500
+      }
+    },
+    "6. Performance (n=1000)": {
+      "VividnessMem": {
+        "avg_retrieval_ms": 3.08,
+        "prompt_tokens": 185,
+        "memories_stored": 196
+      },
+      "RAG": {
+        "avg_retrieval_ms": 9.74,
+        "prompt_tokens": 165,
+        "memories_stored": 1000
+      },
+      "MemGPT": {
+        "avg_retrieval_ms": 0.93,
+        "prompt_tokens": 77,
+        "memories_stored": 1000
+      }
+    },
+    "6. Performance (n=2000)": {
+      "VividnessMem": {
+        "avg_retrieval_ms": 3.2,
+        "prompt_tokens": 185,
+        "memories_stored": 196
+      },
+      "RAG": {
+        "avg_retrieval_ms": 19.5,
+        "prompt_tokens": 165,
+        "memories_stored": 2000
+      },
+      "MemGPT": {
+        "avg_retrieval_ms": 1.82,
+        "prompt_tokens": 77,
+        "memories_stored": 2000
+      }
+    },
+    "6. Performance (n=5000)": {
+      "VividnessMem": {
+        "avg_retrieval_ms": 3.28,
+        "prompt_tokens": 185,
+        "memories_stored": 196
+      },
+      "RAG": {
+        "avg_retrieval_ms": 50.22,
+        "prompt_tokens": 165,
+        "memories_stored": 5000
+      },
+      "MemGPT": {
+        "avg_retrieval_ms": 4.46,
+        "prompt_tokens": 77,
+        "memories_stored": 5000
+      }
+    }
+  }
+}
