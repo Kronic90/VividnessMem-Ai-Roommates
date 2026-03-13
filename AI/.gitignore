@@ -22,3 +22,5 @@
 !benchmarks/**
 !memory_snapshots/
 !memory_snapshots/**
+!standalone memory/
+!standalone memory/**

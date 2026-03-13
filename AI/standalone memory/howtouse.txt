@@ -1,0 +1,247 @@
+VividnessMem — How To Use
+=========================
+
+A standalone organic memory system for any LLM agent.
+Zero dependencies beyond Python 3.10+ standard library.
+
+
+INSTALL
+-------
+Copy VividnessMem.py into your project. That's it.
+
+
+QUICK START
+-----------
+
+    from VividnessMem import VividnessMem
+
+    # Initialize — memories are saved to ./memory_data/ by default
+    mem = VividnessMem()
+
+    # Or pick your own directory:
+    mem = VividnessMem(data_dir="my_agent/memories")
+
+
+ADDING MEMORIES
+---------------
+After your agent has a conversation, ask your LLM to decide what to
+remember (use the built-in curation prompt), then store the results:
+
+    from VividnessMem import VividnessMem, CURATION_PROMPT, parse_curation_response
+
+    mem = VividnessMem()
+
+    # 1. Send CURATION_PROMPT to your LLM at the end of a conversation
+    llm_response = your_llm.generate(CURATION_PROMPT)
+
+    # 2. Parse the JSON response
+    entries = parse_curation_response(llm_response)
+
+    # 3. Store each memory
+    for entry in entries:
+        if entry.get("bank") == "self":
+            mem.add_self_reflection(
+                content=entry["content"],
+                emotion=entry.get("emotion", "neutral"),
+                importance=entry.get("importance", 5),
+                why_saved=entry.get("why_saved", ""),
+            )
+        elif entry.get("bank") == "social":
+            mem.add_social_impression(
+                entity="Alice",   # whoever the agent was talking to
+                content=entry["content"],
+                emotion=entry.get("emotion", "neutral"),
+                importance=entry.get("importance", 5),
+                why_saved=entry.get("why_saved", ""),
+            )
+
+    # 4. Save to disk
+    mem.save()
+
+Or add memories directly without the LLM curation step:
+
+    mem.add_self_reflection(
+        content="I really enjoy helping people debug code",
+        emotion="happy",
+        importance=7,
+    )
+    mem.save()
+
+
+RETRIEVING MEMORIES (injecting into system prompt)
+--------------------------------------------------
+Every turn, call get_context_block() and inject the result into your
+agent's system prompt:
+
+    # Get the memory block for this turn
+    context_block = mem.get_context_block(
+        current_entity="Alice",              # who we're talking to
+        conversation_context="last 2-3 messages here",  # for fg/bg split
+    )
+
+    # Inject it into your system prompt
+    system_prompt = f"""You are a helpful assistant.
+
+    {context_block}
+
+    Respond naturally based on what you remember."""
+
+
+RESONANCE (old memories resurfacing)
+------------------------------------
+Before building the context block, check for resonant memories:
+
+    resonant = mem.resonate(context="the last few messages of conversation")
+
+    context_block = mem.get_context_block(
+        current_entity="Alice",
+        resonant=resonant,
+        conversation_context="the last few messages",
+    )
+
+Resonance finds old faded memories that match the current conversation
+topic. It uses an inverted keyword index for fast lookup.
+
+
+MOOD SYSTEM
+-----------
+The mood system shifts the agent's emotional state gradually based on
+conversation. It biases which memories surface (mood-congruent recall).
+
+    # After each exchange, update mood with emotions from the conversation
+    mem.update_mood_from_conversation(["happy", "curious"])
+
+    # Check current mood
+    print(mem.mood_label)   # e.g. "happy"
+    print(mem.mood)         # PAD vector, e.g. (0.6, 0.3, 0.2)
+
+
+SESSION MANAGEMENT & MAINTENANCE
+---------------------------------
+Call these between sessions:
+
+    # Bump session counter
+    session_num = mem.bump_session()
+
+    # Check if it's time for maintenance
+    if mem.needs_brief():
+        prompt = mem.prepare_brief_prompt(entity="Alice")
+        response = your_llm.generate(prompt)
+        parsed = parse_brief_response(response)
+        mem.apply_brief(parsed, entity="Alice")
+
+    if mem.needs_rescore():
+        prompt, indexed = mem.prepare_rescore_prompt()
+        if prompt:
+            response = your_llm.generate(prompt)
+            adjustments = parse_rescore_response(response)
+            mem.apply_rescores(adjustments, indexed)
+
+    # Save everything
+    mem.save()
+    mem._save_brief()
+
+
+MEMORY CONSOLIDATION
+--------------------
+Periodically (e.g. every 10 sessions), consolidate related memories:
+
+    prompt = mem.prepare_consolidation_prompt()
+    if prompt:
+        response = your_llm.generate(prompt)
+        gists = parse_curation_response(response)  # same JSON format
+        mem.apply_consolidation(gists)
+        mem.save()
+
+
+CONTRADICTION DETECTION
+-----------------------
+The system automatically flags contradictions in get_context_block().
+You can also check manually:
+
+    pairs = mem.detect_contradictions()
+    for older, newer in pairs:
+        print(f"Conflict: '{older.content}' vs '{newer.content}'")
+
+
+STATS
+-----
+    print(mem.stats())
+    # {
+    #   "total_self_reflections": 42,
+    #   "active_self": 8,
+    #   "social_entities": ["Alice", "Bob"],
+    #   "total_social": 15,
+    #   "session_count": 12,
+    #   "has_brief": True
+    # }
+
+
+FILE STRUCTURE
+--------------
+VividnessMem persists everything as plain JSON:
+
+    memory_data/
+      self_memory.json      # all self-reflections
+      brief.json            # compressed briefs, session counter, mood
+      social/
+        alice.json           # impressions of Alice
+        bob.json             # impressions of Bob
+
+
+KEY CONCEPTS
+------------
+- Vividness:    importance * retention_curve(age, stability)
+                Memories naturally fade. Accessing them at the right
+                time reinforces them (spaced repetition).
+
+- Mood:         PAD vector (Pleasure, Arousal, Dominance).
+                Shifts gradually with conversation emotions.
+                Biases which memories surface (mood-congruent recall).
+
+- Resonance:    Old faded memories resurfacing when the current
+                conversation matches their keywords. Uses an inverted
+                index for fast O(k) lookup.
+
+- Associations: Memories linked by shared concepts. When one resonates,
+                connected memories can chain-activate.
+
+- Foreground/   Active memories split by relevance to the current
+  Background:   conversation. Foreground gets full text; background
+                gets compressed one-liners. Saves prompt tokens.
+
+- Touch         Memories only get reinforced if they share keywords
+  Dampener:     with the current context. Prevents blind top-N boosting.
+
+- Deduplication: New memories with >80% word overlap merge with existing
+                 ones (keeping higher importance, preserving history).
+
+- Briefs:       Periodic LLM-generated compressed self-summaries that
+                capture patterns across many memories.
+
+- Rescoring:    Periodic LLM re-evaluation of importance scores based
+                on actual access patterns. Includes emotional reappraisal.
+
+- Consolidation: Clustering related memories and asking the LLM to
+                 synthesize them into gist insights.
+
+- Contradictions: Automatic detection of memories that may conflict
+                  (same topic, opposing emotion or negation patterns).
+
+
+TUNING
+------
+Override class constants to adjust behavior:
+
+    mem = VividnessMem()
+    mem.ACTIVE_SELF_LIMIT = 12       # surface more memories per turn
+    mem.RESONANCE_LIMIT = 5          # allow more resonant memories
+    mem.RESONANCE_SCORE_FLOOR = 2.0  # lower = more lenient resonance
+
+
+LICENSE
+-------
+MIT — use it however you want.
+
+Author: Kronic90
+GitHub: https://github.com/Kronic90/VividnessMem-Ai-Roommates

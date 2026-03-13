@@ -1,0 +1,1344 @@
+"""
+VividnessMem — Organic Memory System for LLM Agents
+====================================================
+
+A standalone, plug-and-play memory system that any LLM-based agent can use.
+No personas, no frameworks — just import and go.
+
+    from VividnessMem import VividnessMem
+
+Features:
+ • Vividness-ranked recall (spaced-repetition decay, importance weighting)
+ • Mood-congruent memory (emotional state biases which memories surface)
+ • Associative chains (memories linked by shared concepts)
+ • Resonance (old faded memories resurfacing when context matches)
+ • Foreground / background context split (saves prompt tokens)
+ • Soft deduplication with merge-on-conflict
+ • Contradiction detection between memories
+ • Memory consolidation (clustering related memories into gist insights)
+ • Compressed briefs (periodic LLM-generated self-summaries)
+ • Importance re-scoring with emotional reappraisal
+ • Inverted word/prefix index for O(k) resonance lookup
+ • Touch dampener (only reinforces context-relevant memories)
+ • Full JSON persistence to disk
+
+Author : Kronic90  — https://github.com/Kronic90/VividnessMem-Ai-Roommates
+License: MIT
+"""
+
+from __future__ import annotations
+
+import json
+import math
+import os
+import re
+from datetime import datetime
+from pathlib import Path
+from typing import Optional
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  Constants & helpers
+# ═══════════════════════════════════════════════════════════════════════════
+
+_DEDUP_THRESHOLD = 0.80  # Jaccard overlap to consider two memories duplicates
+
+# Common English stop words stripped before dedup comparison
+_DEDUP_STOP = frozenset(
+    "i me my myself we our ours ourselves you your yours yourself yourselves "
+    "he him his himself she her hers herself it its itself they them their "
+    "theirs themselves what which who whom this that these those am is are "
+    "was were be been being have has had having do does did doing a an the "
+    "and but if or because as until while of at by for with about against "
+    "between through during before after above below to from up down in out "
+    "on off over under again further then once here there when where why how "
+    "all both each few more most other some such no nor not only own same so "
+    "than too very s t can will just don should now d ll m o re ve y ain "
+    "aren couldn didn doesn hadn hasn haven isn ma mightn mustn needn shan "
+    "shouldn wasn weren won wouldn really think feel like know want "
+    "would could also much get got going one thing".split()
+)
+
+# Stop words for resonance matching — skip words too common to be meaningful
+_RESONANCE_STOP = frozenset(
+    "that this with have from what your about been just like "
+    "them they when will been know really think feel would could also much "
+    "some more than very into does doing make made been thing there their "
+    "then these those which where while each other another such even "
+    "tell told said says talk talked talking about"
+    " want wanted wants going goes gone come came "
+    "still always never sometimes maybe perhaps "
+    "today yesterday tomorrow tonight morning evening night "
+    "something anything everything nothing "
+    "someone anyone everyone nobody "
+    "here there everywhere somewhere ".split()
+)
+
+
+def _content_words(text: str) -> set[str]:
+    """Extract meaningful (non-stop) words from text for comparison."""
+    return set(text.lower().split()) - _DEDUP_STOP
+
+
+def _overlap_ratio(words_a: set[str], words_b: set[str]) -> float:
+    """Jaccard similarity between two word sets."""
+    if not words_a or not words_b:
+        return 0.0
+    return len(words_a & words_b) / len(words_a | words_b)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  Emotion → PAD vector mapping (Pleasure-Arousal-Dominance)
+# ═══════════════════════════════════════════════════════════════════════════
+EMOTION_VECTORS: dict[str, tuple[float, float, float]] = {
+    # positive-calm
+    "content":         ( 0.7,  -0.3,  0.3),
+    "peaceful":        ( 0.8,  -0.5,  0.4),
+    "serene":          ( 0.8,  -0.6,  0.3),
+    "grateful":        ( 0.8,   0.1,  0.4),
+    "appreciative":    ( 0.7,   0.0,  0.3),
+    "hopeful":         ( 0.6,   0.2,  0.3),
+    "warm":            ( 0.7,   0.1,  0.3),
+    "tender":          ( 0.6,  -0.1,  0.0),
+    "affectionate":    ( 0.7,   0.2,  0.2),
+    # positive-active
+    "happy":           ( 0.8,   0.4,  0.5),
+    "joyful":          ( 0.9,   0.6,  0.5),
+    "excited":         ( 0.7,   0.8,  0.5),
+    "enthusiastic":    ( 0.7,   0.7,  0.5),
+    "proud":           ( 0.7,   0.4,  0.7),
+    "amused":          ( 0.6,   0.5,  0.4),
+    "playful":         ( 0.7,   0.6,  0.4),
+    "inspired":        ( 0.7,   0.5,  0.5),
+    "curious":         ( 0.5,   0.6,  0.3),
+    "fascinated":      ( 0.6,   0.6,  0.3),
+    "motivated":       ( 0.6,   0.5,  0.6),
+    "triumphant":      ( 0.8,   0.6,  0.8),
+    "delighted":       ( 0.9,   0.5,  0.5),
+    # neutral / reflective
+    "neutral":         ( 0.0,   0.0,  0.0),
+    "thoughtful":      ( 0.2,   0.1,  0.3),
+    "reflective":      ( 0.2,  -0.1,  0.2),
+    "contemplative":   ( 0.2,  -0.2,  0.2),
+    "nostalgic":       ( 0.3,  -0.1,  0.1),
+    "bittersweet":     ( 0.1,   0.0,  0.0),
+    "wistful":         ( 0.1,  -0.2,  0.0),
+    "understanding":   ( 0.4,   0.0,  0.4),
+    # negative-low arousal
+    "sad":             (-0.6,  -0.3, -0.3),
+    "lonely":          (-0.7,  -0.4, -0.5),
+    "melancholy":      (-0.5,  -0.4, -0.2),
+    "disappointed":    (-0.5,  -0.2, -0.3),
+    "guilty":          (-0.5,   0.1, -0.6),
+    "insecure":        (-0.4,   0.2, -0.5),
+    "vulnerable":      (-0.3,   0.1, -0.5),
+    # negative-high arousal
+    "anxious":         (-0.5,   0.7, -0.4),
+    "frustrated":      (-0.5,   0.6, -0.2),
+    "angry":           (-0.7,   0.8,  0.2),
+    "hurt":            (-0.6,   0.3, -0.5),
+    "confused":        (-0.3,   0.4, -0.3),
+    "overwhelmed":     (-0.4,   0.7, -0.5),
+    "embarrassed":     (-0.5,   0.5, -0.6),
+    "jealous":         (-0.6,   0.6, -0.2),
+    "afraid":          (-0.7,   0.8, -0.6),
+    "resentful":       (-0.6,   0.5, -0.1),
+}
+
+# ── Spaced-repetition constants ───────────────────────────────────────────
+INITIAL_STABILITY = 3.0   # days before first ~50 % fade
+SPACING_BONUS    = 1.8    # multiplier per well-spaced touch
+MIN_SPACING_DAYS = 0.5    # touches closer than this don't boost stability
+
+# ── Association & brief constants ─────────────────────────────────────────
+ASSOCIATION_HOPS       = 2
+ASSOCIATION_MIN_WEIGHT = 2
+BRIEF_INTERVAL         = 3   # regenerate compressed brief every N sessions
+RESCORE_INTERVAL       = 3   # re-evaluate importance scores every N sessions
+
+
+def _emotion_to_vector(emotion: str) -> tuple[float, float, float] | None:
+    """Map an emotion label to its PAD vector, or None if unknown."""
+    if not emotion:
+        return None
+    key = emotion.lower().strip()
+    if key in EMOTION_VECTORS:
+        return EMOTION_VECTORS[key]
+    # Fuzzy: check if the emotion starts with a known key
+    for k, v in EMOTION_VECTORS.items():
+        if key.startswith(k) or k.startswith(key):
+            return v
+    return None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  Memory (single memory unit)
+# ═══════════════════════════════════════════════════════════════════════════
+
+class Memory:
+    """A single memory with organic vividness decay.
+
+    Memories fade over time following a spaced-repetition curve.
+    Retrieving a memory at the right time reinforces it (touch),
+    while cramming (too-frequent access) has diminishing returns.
+    Each memory carries an emotion tag mapped to a PAD vector for
+    mood-congruent recall.
+    """
+
+    __slots__ = (
+        "content", "emotion", "importance", "timestamp",
+        "source", "entity", "_access_count", "_last_access",
+        "_stability", "why_saved",
+    )
+
+    def __init__(self, content: str, emotion: str = "neutral",
+                 importance: int = 5, source: str = "reflection",
+                 entity: str = "", why_saved: str = ""):
+        self.content = content
+        self.emotion = emotion
+        self.importance = max(1, min(10, importance))
+        self.timestamp = datetime.now().isoformat()
+        self.source = source
+        self.entity = entity
+        self._access_count: int = 0
+        self._last_access: str = self.timestamp
+        self._stability: float = INITIAL_STABILITY
+        self.why_saved = why_saved
+
+    # ── spaced-repetition touch ───────────────────────────────────────
+    def touch(self):
+        """Record an access. Well-spaced touches increase stability."""
+        now = datetime.now()
+        last = datetime.fromisoformat(self._last_access)
+        gap_days = (now - last).total_seconds() / 86400
+
+        if gap_days >= MIN_SPACING_DAYS:
+            self._stability *= SPACING_BONUS
+        self._access_count += 1
+        self._last_access = now.isoformat()
+
+    # ── vividness (decayed importance) ────────────────────────────────
+    @property
+    def vividness(self) -> float:
+        age_days = (datetime.now()
+                    - datetime.fromisoformat(self.timestamp)
+                    ).total_seconds() / 86400
+        retention = math.exp(-age_days / max(self._stability, 0.1))
+        return self.importance * retention
+
+    def mood_adjusted_vividness(self, mood_vector: tuple[float, float, float]) -> float:
+        """Vividness boosted when memory emotion matches current mood."""
+        base = self.vividness
+        mem_vec = _emotion_to_vector(self.emotion)
+        if not mem_vec or mood_vector == (0.0, 0.0, 0.0):
+            return base
+        dot = sum(a * b for a, b in zip(mem_vec, mood_vector))
+        # boost range: 0.85 – 1.15
+        return base * (1.0 + 0.15 * max(-1.0, min(1.0, dot)))
+
+    @property
+    def content_words(self) -> set[str]:
+        return _content_words(self.content)
+
+    # ── serialization ─────────────────────────────────────────────────
+    def to_dict(self) -> dict:
+        return {
+            "content": self.content,
+            "emotion": self.emotion,
+            "importance": self.importance,
+            "timestamp": self.timestamp,
+            "source": self.source,
+            "entity": self.entity,
+            "access_count": self._access_count,
+            "last_access": self._last_access,
+            "stability": self._stability,
+            "why_saved": getattr(self, "why_saved", ""),
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Memory":
+        obj = cls.__new__(cls)
+        obj.content       = d.get("content", "")
+        obj.emotion       = d.get("emotion", "neutral")
+        obj.importance    = max(1, min(10, d.get("importance", 5)))
+        obj.timestamp     = d.get("timestamp", datetime.now().isoformat())
+        obj.source        = d.get("source", "reflection")
+        obj.entity        = d.get("entity", "")
+        obj._access_count = d.get("access_count", 0)
+        obj._last_access  = d.get("last_access", obj.timestamp)
+        obj._stability    = d.get("stability", INITIAL_STABILITY)
+        obj.why_saved     = d.get("why_saved", "")
+        return obj
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  VividnessMem — the main memory system
+# ═══════════════════════════════════════════════════════════════════════════
+
+class VividnessMem:
+    """Organic memory store with vividness-ranked recall.
+
+    Parameters
+    ----------
+    data_dir : str or Path
+        Directory where memory JSON files are persisted.
+        Created automatically if it doesn't exist.
+    """
+
+    # Tuning knobs — override on the class or instance as needed
+    ACTIVE_SELF_LIMIT      = 8
+    ACTIVE_SOCIAL_LIMIT    = 5
+    RESONANCE_LIMIT        = 3
+    RESONANCE_SCORE_FLOOR  = 2.5
+
+    def __init__(self, data_dir: str | Path = "memory_data"):
+        self.data_dir   = Path(data_dir)
+        self.self_file  = self.data_dir / "self_memory.json"
+        self.social_dir = self.data_dir / "social"
+        self.brief_file = self.data_dir / "brief.json"
+
+        self.self_reflections: list[Memory] = []
+        self.social_impressions: dict[str, list[Memory]] = {}
+
+        # Inverted index for O(k) resonance lookup
+        self._word_index:   dict[str, set[int]] = {}
+        self._prefix_index: dict[str, set[int]] = {}
+
+        # Compressed brief data (self-summary, entity summaries, session counter)
+        self._brief_data: dict = {
+            "session_count": 0,
+            "self_brief": "",
+            "entity_briefs": {},
+        }
+        # Mood state (PAD vector)
+        self._mood: tuple[float, float, float] = (0.0, 0.0, 0.0)
+
+        self._ensure_dirs()
+        self._load()
+        self._load_brief()
+        self._rebuild_index()
+
+    # ── directory setup ───────────────────────────────────────────────
+    def _ensure_dirs(self):
+        self.data_dir.mkdir(parents=True, exist_ok=True)
+        self.social_dir.mkdir(parents=True, exist_ok=True)
+
+    # ── inverted index ────────────────────────────────────────────────
+    def _index_memory(self, idx: int, mem: Memory):
+        """Add a single memory to the inverted word/prefix indices."""
+        if not hasattr(self, '_word_index'):
+            self._word_index = {}
+            self._prefix_index = {}
+        text = f"{mem.content} {mem.emotion}".lower()
+        words = set(re.findall(r"\b[a-zA-Z]{4,}\b", text)) - _RESONANCE_STOP
+        for w in words:
+            self._word_index.setdefault(w, set()).add(idx)
+            if len(w) >= 5:
+                self._prefix_index.setdefault(w[:5], set()).add(idx)
+
+    def _rebuild_index(self):
+        """Rebuild the full inverted index from scratch."""
+        self._word_index.clear()
+        self._prefix_index.clear()
+        for i, mem in enumerate(self.self_reflections):
+            self._index_memory(i, mem)
+
+    # ── Add memories ──────────────────────────────────────────────────
+
+    def add_self_reflection(self, content: str, emotion: str = "neutral",
+                            importance: int = 5, source: str = "reflection",
+                            why_saved: str = "") -> Memory:
+        """Store a self-reflection memory. Deduplicates by content overlap.
+
+        If a near-duplicate exists, the new version replaces it (keeping
+        the higher importance and merging access history).
+        """
+        new_words = _content_words(content)
+        for i, existing in enumerate(self.self_reflections):
+            if _overlap_ratio(new_words, existing.content_words) >= _DEDUP_THRESHOLD:
+                # Merge: keep newer text, max importance, preserve history
+                merged = Memory(
+                    content=content,
+                    emotion=emotion,
+                    importance=max(importance, existing.importance),
+                    source=source,
+                    why_saved=why_saved or existing.why_saved,
+                )
+                merged._access_count = existing._access_count
+                merged._stability    = existing._stability
+                merged._last_access  = existing._last_access
+                merged.timestamp     = existing.timestamp  # keep original creation time
+                self.self_reflections[i] = merged
+                self._rebuild_index()
+                return merged
+
+        mem = Memory(content=content, emotion=emotion,
+                     importance=importance, source=source,
+                     why_saved=why_saved)
+        self.self_reflections.append(mem)
+        self._index_memory(len(self.self_reflections) - 1, mem)
+        return mem
+
+    def add_social_impression(self, entity: str, content: str,
+                              emotion: str = "neutral",
+                              importance: int = 5,
+                              why_saved: str = "") -> Memory:
+        """Store a social impression of an entity. Deduplicates per entity."""
+        if entity not in self.social_impressions:
+            self.social_impressions[entity] = []
+        impressions = self.social_impressions[entity]
+
+        new_words = _content_words(content)
+        for i, existing in enumerate(impressions):
+            if _overlap_ratio(new_words, existing.content_words) >= _DEDUP_THRESHOLD:
+                merged = Memory(
+                    content=content,
+                    emotion=emotion,
+                    importance=max(importance, existing.importance),
+                    entity=entity,
+                    why_saved=why_saved or existing.why_saved,
+                )
+                merged._access_count = existing._access_count
+                merged._stability    = existing._stability
+                merged._last_access  = existing._last_access
+                merged.timestamp     = existing.timestamp
+                impressions[i] = merged
+                return merged
+
+        mem = Memory(content=content, emotion=emotion,
+                     importance=importance, source="social",
+                     entity=entity, why_saved=why_saved)
+        impressions.append(mem)
+        return mem
+
+    # ── Retrieve active memories ──────────────────────────────────────
+
+    def get_active_self(self, context: str = "") -> list[Memory]:
+        """Return the most vivid self-memories, mood-weighted.
+
+        Touch dampener: memories only get reinforced (touch) if they share
+        at least one context word with the current conversation.  This
+        prevents every recall from blindly boosting the top-N.
+        """
+        ranked = sorted(
+            self.self_reflections,
+            key=lambda r: r.mood_adjusted_vividness(self._mood),
+            reverse=True,
+        )
+        active = ranked[:self.ACTIVE_SELF_LIMIT]
+
+        # Touch dampener — only reinforce memories relevant to context
+        if context:
+            ctx_words = {
+                w for w in re.findall(r"\b[a-zA-Z]{4,}\b", context.lower())
+            } - _RESONANCE_STOP
+            for mem in active:
+                mem_words = set(re.findall(
+                    r"\b[a-zA-Z]{4,}\b",
+                    f"{mem.content} {mem.emotion}".lower()))
+                if ctx_words & mem_words:
+                    mem.touch()
+        else:
+            for mem in active:
+                mem.touch()
+
+        return active
+
+    def partition_active_self(self, context: str = "") -> tuple[list[Memory], list[Memory]]:
+        """Split active memories into foreground (relevant) and background.
+
+        Foreground: memories that share keyword overlap with the current
+        conversation context — these get full text in the prompt.
+        Background: remaining active memories — shown as compressed
+        one-liners to save tokens while preserving awareness.
+
+        If no context is provided, everything goes to foreground.
+        """
+        active = self.get_active_self(context=context)
+        if not context:
+            return active, []
+
+        ctx_words = {
+            w for w in re.findall(r"\b[a-zA-Z]{4,}\b", context.lower())
+        } - _RESONANCE_STOP
+
+        if not ctx_words:
+            return active, []
+
+        foreground, background = [], []
+        for mem in active:
+            mem_words = set(re.findall(
+                r"\b[a-zA-Z]{4,}\b",
+                f"{mem.content} {mem.emotion}".lower()))
+            if ctx_words & mem_words:
+                foreground.append(mem)
+            else:
+                background.append(mem)
+
+        # If nothing matched, put top 3 in foreground anyway
+        if not foreground and active:
+            return active[:3], active[3:]
+
+        return foreground, background
+
+    def get_active_social(self, entity: str) -> list[Memory]:
+        """Return the most vivid social impressions for a given entity."""
+        impressions = self.social_impressions.get(entity, [])
+        ranked = sorted(
+            impressions,
+            key=lambda r: r.mood_adjusted_vividness(self._mood),
+            reverse=True,
+        )
+        return ranked[:self.ACTIVE_SOCIAL_LIMIT]
+
+    # ── Mood system ───────────────────────────────────────────────────
+
+    @property
+    def mood(self) -> tuple[float, float, float]:
+        return self._mood
+
+    @property
+    def mood_label(self) -> str:
+        """Human-readable mood label from current PAD vector."""
+        if self._mood == (0.0, 0.0, 0.0):
+            return "neutral"
+        p, a, d = self._mood
+        best_label, best_dot = "neutral", -999.0
+        for label, vec in EMOTION_VECTORS.items():
+            dot = p * vec[0] + a * vec[1] + d * vec[2]
+            if dot > best_dot:
+                best_dot = dot
+                best_label = label
+        return best_label
+
+    def update_mood_from_conversation(self, emotions: list[str]):
+        """Shift mood toward emotions expressed in the latest exchange.
+
+        Uses exponential moving average so mood drifts gradually.
+        """
+        if not emotions:
+            return
+        vectors = [_emotion_to_vector(e) for e in emotions]
+        vectors = [v for v in vectors if v is not None]
+        if not vectors:
+            return
+        avg = tuple(sum(v[i] for v in vectors) / len(vectors) for i in range(3))
+        alpha = 0.3  # blending factor
+        self._mood = tuple(
+            round(self._mood[i] * (1 - alpha) + avg[i] * alpha, 4)
+            for i in range(3)
+        )
+
+    def _absorb_mood_from_memories(self):
+        """Initialize mood from the most vivid memories on load."""
+        top = sorted(self.self_reflections,
+                     key=lambda r: r.vividness, reverse=True)[:5]
+        if not top:
+            return
+        vectors = [_emotion_to_vector(r.emotion) for r in top]
+        vectors = [v for v in vectors if v is not None]
+        if vectors:
+            self._mood = tuple(
+                round(sum(v[i] for v in vectors) / len(vectors), 4)
+                for i in range(3)
+            )
+
+    def _save_mood(self):
+        self._brief_data["mood"] = list(self._mood)
+
+    def _load_mood(self):
+        raw = self._brief_data.get("mood")
+        if isinstance(raw, (list, tuple)) and len(raw) == 3:
+            self._mood = tuple(float(x) for x in raw)
+        else:
+            self._absorb_mood_from_memories()
+
+    # ── Association graph ─────────────────────────────────────────────
+
+    def _build_association_edges(self) -> dict[int, dict[int, int]]:
+        """Build a weighted graph connecting memories that share keywords.
+
+        Returns {idx: {neighbor_idx: overlap_count, ...}, ...}
+        """
+        n = len(self.self_reflections)
+        word_sets = [
+            set(re.findall(r"\b[a-zA-Z]{4,}\b",
+                           f"{r.content} {r.emotion}".lower())) - _RESONANCE_STOP
+            for r in self.self_reflections
+        ]
+        edges: dict[int, dict[int, int]] = {i: {} for i in range(n)}
+        for i in range(n):
+            for j in range(i + 1, n):
+                shared = len(word_sets[i] & word_sets[j])
+                if shared >= ASSOCIATION_MIN_WEIGHT:
+                    edges[i][j] = shared
+                    edges[j][i] = shared
+        return edges
+
+    def associate(self, seed_indices: list[int],
+                  hops: int = ASSOCIATION_HOPS) -> list[Memory]:
+        """Walk the association graph from seed memories.
+
+        Returns up to RESONANCE_LIMIT associated memories (not including seeds).
+        """
+        edges = self._build_association_edges()
+        visited = set(seed_indices)
+        frontier = set(seed_indices)
+        found: list[tuple[float, int]] = []
+
+        for hop in range(hops):
+            next_frontier: set[int] = set()
+            for node in frontier:
+                for neighbor, weight in edges.get(node, {}).items():
+                    if neighbor not in visited:
+                        visited.add(neighbor)
+                        next_frontier.add(neighbor)
+                        score = weight / (hop + 1)
+                        found.append((score, neighbor))
+            frontier = next_frontier
+
+        found.sort(key=lambda x: x[0], reverse=True)
+        return [self.self_reflections[idx] for _, idx in found[:self.RESONANCE_LIMIT]]
+
+    # ── Contradiction detection ───────────────────────────────────────
+
+    def detect_contradictions(self, limit: int = 5) -> list[tuple[Memory, Memory]]:
+        """Find pairs of memories that may contradict each other.
+
+        Looks for memories sharing topic overlap but with opposing
+        emotional valence or negation patterns. Returns (older, newer) pairs.
+        """
+        if len(self.self_reflections) < 2:
+            return []
+
+        contradictions: list[tuple[float, Memory, Memory]] = []
+        n = len(self.self_reflections)
+
+        for i in range(n):
+            for j in range(i + 1, n):
+                a, b = self.self_reflections[i], self.self_reflections[j]
+                score = self._contradiction_score(a, b)
+                if score > 0.5:
+                    if a.timestamp <= b.timestamp:
+                        contradictions.append((score, a, b))
+                    else:
+                        contradictions.append((score, b, a))
+
+        contradictions.sort(key=lambda x: x[0], reverse=True)
+        return [(a, b) for _, a, b in contradictions[:limit]]
+
+    @staticmethod
+    def _contradiction_score(a: Memory, b: Memory) -> float:
+        """Score how likely two memories contradict each other."""
+        words_a = _content_words(a.content)
+        words_b = _content_words(b.content)
+        topic_overlap = _overlap_ratio(words_a, words_b)
+        if topic_overlap < 0.15:
+            return 0.0
+
+        score = 0.0
+
+        vec_a = _emotion_to_vector(a.emotion)
+        vec_b = _emotion_to_vector(b.emotion)
+        if vec_a and vec_b:
+            valence_diff = abs(vec_a[0] - vec_b[0])
+            if valence_diff > 0.8:
+                score += 0.4
+
+        if min(a.importance, b.importance) < 3:
+            return 0.0
+
+        _NEG = {"not", "no", "never", "don't", "doesn't", "isn't", "wasn't",
+                "wouldn't", "couldn't", "can't", "won't", "hardly", "barely"}
+        a_has_neg = bool(_NEG & set(a.content.lower().split()))
+        b_has_neg = bool(_NEG & set(b.content.lower().split()))
+        if a_has_neg != b_has_neg and topic_overlap > 0.25:
+            score += 0.4
+
+        score *= (0.5 + topic_overlap)
+        return min(1.0, score)
+
+    def get_contradiction_context(self) -> str:
+        """Build a context string flagging detected contradictions."""
+        pairs = self.detect_contradictions(limit=3)
+        if not pairs:
+            return ""
+        lines = ["=== POSSIBLE CONTRADICTIONS IN MY MEMORIES ===",
+                 "(These memories seem to conflict — consider which still feels true)"]
+        for older, newer in pairs:
+            lines.append(f'  Earlier: "{older.content}" ({older.emotion})')
+            lines.append(f'  Later:   "{newer.content}" ({newer.emotion})')
+            lines.append("")
+        return "\n".join(lines)
+
+    # ── Memory consolidation ("sleep") ────────────────────────────────
+
+    def find_consolidation_clusters(self, min_cluster: int = 3,
+                                     max_clusters: int = 3) -> list[list[Memory]]:
+        """Find groups of related memories that could be consolidated into gist memories."""
+        if len(self.self_reflections) < min_cluster:
+            return []
+
+        n = len(self.self_reflections)
+        word_sets = [_content_words(r.content) for r in self.self_reflections]
+        adjacency: dict[int, set[int]] = {i: set() for i in range(n)}
+
+        for i in range(n):
+            for j in range(i + 1, n):
+                overlap = _overlap_ratio(word_sets[i], word_sets[j])
+                if 0.25 <= overlap < _DEDUP_THRESHOLD:
+                    adjacency[i].add(j)
+                    adjacency[j].add(i)
+
+        used: set[int] = set()
+        clusters: list[list[Memory]] = []
+        by_degree = sorted(range(n), key=lambda i: len(adjacency[i]), reverse=True)
+        for seed in by_degree:
+            if seed in used or len(adjacency[seed]) < min_cluster - 1:
+                continue
+            cluster_ids = {seed}
+            frontier = {seed}
+            while frontier:
+                node = frontier.pop()
+                for neighbor in adjacency[node]:
+                    if neighbor not in used and neighbor not in cluster_ids:
+                        cluster_ids.add(neighbor)
+                        frontier.add(neighbor)
+            if len(cluster_ids) >= min_cluster:
+                clusters.append([self.self_reflections[i] for i in sorted(cluster_ids)])
+                used |= cluster_ids
+            if len(clusters) >= max_clusters:
+                break
+
+        return clusters
+
+    def prepare_consolidation_prompt(self) -> str:
+        """Build the prompt for between-session memory consolidation.
+
+        Returns empty string if no consolidation needed.
+        """
+        clusters = self.find_consolidation_clusters()
+        if not clusters:
+            return ""
+
+        cluster_blocks = []
+        for i, cluster in enumerate(clusters):
+            mem_lines = []
+            for m in cluster:
+                tag = f" ({m.emotion})" if m.emotion else ""
+                mem_lines.append(f"  - {m.content}{tag}")
+            cluster_blocks.append(
+                f"CLUSTER {i + 1} ({len(cluster)} related memories):\n"
+                + "\n".join(mem_lines)
+            )
+
+        return CONSOLIDATION_PROMPT.format(
+            clusters="\n\n".join(cluster_blocks))
+
+    def apply_consolidation(self, gists: list[dict]):
+        """Store consolidation gists as new synthetic memories."""
+        for g in gists:
+            content = g.get("gist", "").strip()
+            if not content or len(content) < 20:
+                continue
+            new_words = _content_words(content)
+            is_dup = False
+            for existing in self.self_reflections:
+                if _overlap_ratio(new_words, _content_words(existing.content)) >= _DEDUP_THRESHOLD:
+                    is_dup = True
+                    break
+            if is_dup:
+                continue
+            self.self_reflections.append(Memory(
+                content=content,
+                emotion=g.get("emotion", "understanding"),
+                importance=g.get("importance", 6),
+                source="consolidation",
+                why_saved="Synthesized from related experiences during memory consolidation",
+            ))
+
+    # ── Resonance (old memories resurfacing) ──────────────────────────
+
+    def resonate(self, context: str, limit: int | None = None) -> list[Memory]:
+        """Find old faded memories that resonate with current conversation.
+
+        Uses the inverted index for O(k) lookup. Dynamic limit based on
+        RESONANCE_SCORE_FLOOR — strong multi-match queries surface more
+        memories; weak queries don't waste slots.
+        """
+        hard_cap = max(limit or self.RESONANCE_LIMIT, self.RESONANCE_LIMIT + 3)
+        if not context or not self.self_reflections:
+            return []
+
+        context_words = {
+            w for w in re.findall(r"\b[a-zA-Z]{4,}\b", context.lower())
+        } - _RESONANCE_STOP
+        if not context_words:
+            return []
+
+        context_prefixes = {w[:5] for w in context_words if len(w) >= 5}
+
+        active_set = set(
+            id(r) for r in sorted(
+                self.self_reflections,
+                key=lambda r: r.mood_adjusted_vividness(self._mood),
+                reverse=True,
+            )[:self.ACTIVE_SELF_LIMIT]
+        )
+
+        # Lazy rebuild if index is stale
+        if self.self_reflections and not getattr(self, '_word_index', None):
+            self._word_index: dict[str, set[int]] = {}
+            self._prefix_index: dict[str, set[int]] = {}
+            self._rebuild_index()
+
+        candidate_indices: set[int] = set()
+        for w in context_words:
+            candidate_indices |= self._word_index.get(w, set())
+        for p in context_prefixes:
+            candidate_indices |= self._prefix_index.get(p, set())
+
+        scored: list[tuple[float, int, Memory]] = []
+        seed_indices: list[int] = []
+        for idx in candidate_indices:
+            if idx >= len(self.self_reflections):
+                continue
+            ref = self.self_reflections[idx]
+            if id(ref) in active_set:
+                continue
+
+            mem_text = f"{ref.content} {ref.emotion}".lower()
+            mem_words = set(re.findall(r"\b[a-zA-Z]{4,}\b", mem_text))
+            mem_prefixes = {w[:5] for w in mem_words if len(w) >= 5}
+
+            exact_overlap = len(context_words & mem_words)
+            prefix_overlap = len(context_prefixes & mem_prefixes)
+            total_overlap = max(exact_overlap, prefix_overlap)
+
+            if total_overlap >= 1:
+                score = total_overlap + (ref.importance * 0.2)
+                scored.append((score, idx, ref))
+                seed_indices.append(idx)
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+
+        resonant: list[Memory] = []
+        for score, idx, ref in scored:
+            if len(resonant) >= hard_cap:
+                break
+            if score >= self.RESONANCE_SCORE_FLOOR:
+                resonant.append(ref)
+
+        # Associative chain expansion
+        if seed_indices:
+            associated = self.associate(seed_indices[:5], hops=ASSOCIATION_HOPS)
+            resonant_ids = {id(r) for r in resonant} | active_set
+            for a in associated:
+                if id(a) not in resonant_ids and len(resonant) < hard_cap:
+                    a_words = set(re.findall(r"\b[a-zA-Z]{4,}\b",
+                                             f"{a.content} {a.emotion}".lower()))
+                    a_prefixes = {w[:5] for w in a_words if len(w) >= 5}
+                    if (context_words & a_words) or (context_prefixes & a_prefixes):
+                        resonant.append(a)
+                        resonant_ids.add(id(a))
+
+        for r in resonant:
+            r.touch()
+
+        return resonant
+
+    # ── Context block (inject into your agent's system prompt) ────────
+
+    def get_context_block(self, current_entity: str = "",
+                          resonant: list[Memory] | None = None,
+                          conversation_context: str = "") -> str:
+        """Build a narrative memory block for injection into a system prompt.
+
+        Returns a first-person text block including:
+        - Mood indicator
+        - Compressed self-brief (if available)
+        - Entity brief (if entity provided)
+        - Foreground memories (full text, relevant to context)
+        - Background memories (compressed one-liners)
+        - Social impressions for the current entity
+        - Resonant memories (old ones resurfacing)
+        - Contradiction flags
+        """
+        lines = []
+
+        # Mood indicator
+        mood_label = self.mood_label
+        if mood_label != "neutral":
+            lines.append(f"(Right now I'm feeling somewhat {mood_label}.)")
+            lines.append("")
+
+        # Compressed brief
+        self_brief = self._brief_data.get("self_brief", "")
+        if self_brief:
+            lines.append("=== MY COMPRESSED SELF-UNDERSTANDING ===")
+            lines.append(self_brief)
+            lines.append("")
+        if current_entity:
+            entity_brief = self._brief_data.get("entity_briefs", {}).get(current_entity, "")
+            if entity_brief:
+                lines.append(f"=== MY UNDERSTANDING OF {current_entity.upper()} ===")
+                lines.append(entity_brief)
+                lines.append("")
+
+        foreground, background = self.partition_active_self(context=conversation_context)
+        if foreground:
+            if conversation_context and background:
+                lines.append("=== THINGS ON MY MIND RIGHT NOW ===")
+            else:
+                lines.append("=== THINGS I KNOW ABOUT MYSELF ===")
+            for r in foreground:
+                emotion_tag = f" ({r.emotion})" if r.emotion else ""
+                lines.append(f"— {r.content}{emotion_tag}")
+            lines.append("")
+        if background:
+            lines.append("=== THINGS I KNOW ABOUT MYSELF (background) ===")
+            for r in background:
+                short = r.content[:60].rstrip() + ("…" if len(r.content) > 60 else "")
+                emotion_tag = f" ({r.emotion})" if r.emotion else ""
+                lines.append(f"· {short}{emotion_tag}")
+            lines.append("")
+
+        if current_entity:
+            active_social = self.get_active_social(current_entity)
+            if active_social:
+                lines.append(f"=== MY IMPRESSIONS OF {current_entity.upper()} ===")
+                for r in active_social:
+                    emotion_tag = f" ({r.emotion})" if r.emotion else ""
+                    lines.append(f"— {r.content}{emotion_tag}")
+                lines.append("")
+
+        if resonant:
+            lines.append("=== SOMETHING THIS REMINDS ME OF (old memories resurfacing) ===")
+            for r in resonant:
+                emotion_tag = f" ({r.emotion})" if r.emotion else ""
+                lines.append(f"— {r.content}{emotion_tag}")
+            lines.append("")
+
+        contradiction_ctx = self.get_contradiction_context()
+        if contradiction_ctx:
+            lines.append(contradiction_ctx)
+            lines.append("")
+
+        return "\n".join(lines) if lines else ""
+
+    # ── Persistence ───────────────────────────────────────────────────
+
+    def save(self):
+        """Persist all memory data to disk."""
+        self._ensure_dirs()
+
+        data = [r.to_dict() for r in self.self_reflections]
+        with open(self.self_file, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+
+        for entity, impressions in self.social_impressions.items():
+            data = [r.to_dict() for r in impressions]
+            safe_name = entity.lower().replace(" ", "_")
+            with open(self.social_dir / f"{safe_name}.json", "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+
+    def _load(self):
+        if self.self_file.exists():
+            try:
+                with open(self.self_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, list):
+                    self.self_reflections = [
+                        Memory.from_dict(d) for d in data
+                        if isinstance(d, dict) and "content" in d
+                    ]
+            except (json.JSONDecodeError, KeyError, TypeError) as e:
+                print(f"[VividnessMem] Warning: corrupt self_memory.json, starting fresh ({e})")
+                self.self_reflections = []
+
+        if self.social_dir.exists():
+            for fpath in self.social_dir.glob("*.json"):
+                entity = fpath.stem.replace("_", " ").title()
+                try:
+                    with open(fpath, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                    if isinstance(data, list):
+                        self.social_impressions[entity] = [
+                            Memory.from_dict(d) for d in data
+                            if isinstance(d, dict) and "content" in d
+                        ]
+                except (json.JSONDecodeError, KeyError, TypeError) as e:
+                    print(f"[VividnessMem] Warning: corrupt {fpath.name}, skipping ({e})")
+
+    # ── Brief & maintenance ───────────────────────────────────────────
+
+    def _load_brief(self):
+        if self.brief_file.exists():
+            try:
+                with open(self.brief_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                if isinstance(data, dict):
+                    self._brief_data.update(data)
+            except (json.JSONDecodeError, KeyError, TypeError):
+                pass
+        self._load_mood()
+
+    def _save_brief(self):
+        self._ensure_dirs()
+        self._save_mood()
+        with open(self.brief_file, "w", encoding="utf-8") as f:
+            json.dump(self._brief_data, f, indent=2, ensure_ascii=False)
+
+    def bump_session(self) -> int:
+        """Increment session counter. Returns new count."""
+        self._brief_data["session_count"] = self._brief_data.get("session_count", 0) + 1
+        self._save_brief()
+        return self._brief_data["session_count"]
+
+    def needs_brief(self) -> bool:
+        """True if it's time to regenerate the compressed brief."""
+        count = self._brief_data.get("session_count", 0)
+        last = self._brief_data.get("last_brief_session", 0)
+        return count - last >= BRIEF_INTERVAL
+
+    def needs_rescore(self) -> bool:
+        """True if it's time to re-evaluate importance scores."""
+        count = self._brief_data.get("session_count", 0)
+        last = self._brief_data.get("last_rescore_session", 0)
+        return count - last >= RESCORE_INTERVAL
+
+    def prepare_brief_prompt(self, entity: str = "") -> str:
+        """Build the prompt for compressed brief generation.
+
+        Pass the name of the entity your agent most commonly talks to.
+        """
+        sorted_self = sorted(self.self_reflections,
+                             key=lambda r: r.vividness, reverse=True)[:50]
+        self_lines = []
+        for r in sorted_self:
+            tag = f" ({r.emotion})" if r.emotion else ""
+            self_lines.append(f"- [imp={r.importance}] {r.content}{tag}")
+        self_text = "\n".join(self_lines) if self_lines else "(no self-reflections yet)"
+
+        entity_mems = self.social_impressions.get(entity, []) if entity else []
+        sorted_social = sorted(entity_mems,
+                               key=lambda r: r.vividness, reverse=True)[:30]
+        social_lines = []
+        for r in sorted_social:
+            tag = f" ({r.emotion})" if r.emotion else ""
+            social_lines.append(f"- [imp={r.importance}] {r.content}{tag}")
+        social_text = ("\n".join(social_lines)
+                       if social_lines else f"(no impressions of {entity or 'others'} yet)")
+
+        prev_self = self._brief_data.get("self_brief", "")
+        prev_entity = self._brief_data.get("entity_briefs", {}).get(entity, "") if entity else ""
+        if prev_self or prev_entity:
+            prev_section = "YOUR PREVIOUS BRIEF (update and improve this):\n"
+            if prev_self:
+                prev_section += f"  Self: {prev_self}\n"
+            if prev_entity:
+                prev_section += f"  {entity}: {prev_entity}\n"
+            prev_section += "\n"
+        else:
+            prev_section = ""
+
+        display_entity = entity or "Others"
+        return BRIEF_PROMPT.format(
+            entity=display_entity,
+            entity_upper=display_entity.upper(),
+            previous_brief_section=prev_section,
+            self_memories=self_text,
+            social_memories=social_text,
+        )
+
+    def apply_brief(self, parsed: dict, entity: str = ""):
+        """Store the compressed brief from LLM response."""
+        if "self_brief" in parsed:
+            self._brief_data["self_brief"] = parsed["self_brief"][:2000]
+        if "entity_brief" in parsed and entity:
+            if "entity_briefs" not in self._brief_data:
+                self._brief_data["entity_briefs"] = {}
+            self._brief_data["entity_briefs"][entity] = parsed["entity_brief"][:2000]
+        self._brief_data["last_brief_session"] = self._brief_data.get("session_count", 0)
+
+    def prepare_rescore_prompt(self) -> tuple[str, list[Memory]]:
+        """Build the prompt for importance re-evaluation.
+
+        Returns (prompt_text, indexed_list_of_memories).
+        """
+        if not self.self_reflections:
+            return "", []
+
+        candidates = []
+        for r in self.self_reflections:
+            age_days = (datetime.now() - datetime.fromisoformat(
+                r.timestamp)).total_seconds() / 86400
+            if age_days < 1:
+                continue
+            access_rate = r._access_count / max(1, age_days)
+            discrepancy = abs(access_rate * 10 - r.importance)
+            candidates.append((discrepancy, r))
+
+        candidates.sort(key=lambda x: x[0], reverse=True)
+        selected = [r for _, r in candidates[:30]]
+
+        if not selected:
+            return "", []
+
+        lines = []
+        for i, r in enumerate(selected):
+            age_days = (datetime.now() - datetime.fromisoformat(
+                r.timestamp)).total_seconds() / 86400
+            tag = f" ({r.emotion})" if r.emotion else ""
+            lines.append(
+                f"[{i}] importance={r.importance}, access_count={r._access_count}, "
+                f"age={age_days:.0f}d: {r.content}{tag}"
+            )
+
+        return RESCORE_PROMPT.format(memories="\n".join(lines)), selected
+
+    def apply_rescores(self, adjustments: list[dict],
+                       indexed_memories: list[Memory]):
+        """Apply importance re-scoring and emotional reappraisal.
+
+        Enforces +/-2 cap per memory.
+        """
+        for adj in adjustments:
+            idx = adj.get("index")
+            new_imp = adj.get("new_importance")
+            if idx is None or new_imp is None:
+                continue
+            if not isinstance(idx, int) or idx < 0 or idx >= len(indexed_memories):
+                continue
+            new_imp = max(1, min(10, int(new_imp)))
+            ref = indexed_memories[idx]
+            clamped = max(ref.importance - 2, min(ref.importance + 2, new_imp))
+            ref.importance = clamped
+            new_emotion = adj.get("new_emotion")
+            if new_emotion and isinstance(new_emotion, str):
+                new_emotion = new_emotion.strip()[:50]
+                if new_emotion:
+                    ref.emotion = new_emotion
+        self._brief_data["last_rescore_session"] = self._brief_data.get("session_count", 0)
+
+    # ── Stats ─────────────────────────────────────────────────────────
+
+    def stats(self) -> dict:
+        """Return a summary of the memory system's state."""
+        return {
+            "total_self_reflections": len(self.self_reflections),
+            "active_self": len(self.get_active_self()),
+            "social_entities": list(self.social_impressions.keys()),
+            "total_social": sum(len(v) for v in self.social_impressions.values()),
+            "session_count": self._brief_data.get("session_count", 0),
+            "has_brief": bool(self._brief_data.get("self_brief")),
+        }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  LLM Prompt Templates (send these to your LLM, parse the JSON response)
+# ═══════════════════════════════════════════════════════════════════════════
+
+CURATION_PROMPT = """The conversation has ended. Take a moment to reflect.
+
+Think about what just happened — what stood out to you? Did you discover
+anything about yourself? Did the other person say something that changed
+how you think? Did you form any new opinions or notice any patterns?
+
+Write down what you want to remember. You have two journals:
+
+1. SELF JOURNAL — reflections about yourself: who you're becoming, what you
+   believe, what you care about, moments that felt meaningful.
+
+2. IMPRESSIONS OF OTHERS — your honest impressions of whoever you spoke
+   with: what they're like, what surprised you, what you agree or disagree
+   on, how they made you feel.
+
+For each memory, also explain your reasoning:
+- WHY you chose to save this particular moment (what made it worth remembering?)
+- WHY you gave it that importance score (what makes it a 3 vs a 9?)
+- WHY that emotion felt like the right tag (what about the moment triggered that feeling?)
+
+For each memory, output it in this exact JSON format:
+
+```json
+[
+  {
+    "bank": "self" or "social",
+    "content": "write this naturally, like a journal entry — in your own voice",
+    "emotion": "how this makes you feel — in your own words",
+    "importance": 1-10,
+    "why_saved": "why you chose to remember this moment specifically",
+    "why_importance": "why you rated it this importance — what makes it significant or not",
+    "why_emotion": "why this emotion — what about the moment triggered this feeling"
+  }
+]
+```
+
+Only write down what genuinely matters to you. You can write 0 entries if nothing stuck.
+Return ONLY the JSON array, no other text."""
+
+
+BRIEF_PROMPT = """You're updating your compressed understanding of yourself and the people you talk to.
+
+Below are your accumulated memories — self-reflections and impressions of {entity}. Read them carefully, then write two compressed briefs that capture PATTERNS, not individual events.
+
+{previous_brief_section}YOUR SELF-REFLECTIONS:
+{self_memories}
+
+YOUR IMPRESSIONS OF {entity_upper}:
+{social_memories}
+
+Write two compressed briefs:
+
+1. SELF BRIEF — A distilled understanding of who you are right now:
+   Core values, emotional patterns, recurring themes, growth arcs, what matters most.
+   NOT a list of memories — a coherent portrait. Under 1000 characters.
+
+2. {entity_upper} BRIEF — Your distilled understanding of {entity}:
+   Their personality, communication style, shared interests, relationship dynamics.
+   NOT a list of interactions — a coherent impression. Under 1000 characters.
+
+Return ONLY this JSON:
+```json
+{{
+  "self_brief": "your compressed self-understanding...",
+  "entity_brief": "your compressed understanding of {entity}..."
+}}
+```
+
+Be honest and specific. Compress patterns, not individual events.
+Return ONLY the JSON, no other text."""
+
+
+RESCORE_PROMPT = """You wrote these memories at different times with importance scores (1-10).
+Now, with more context, some scores may need adjustment.
+
+Look for:
+- Memories accessed often (high access_count) but rated low — probably underrated
+- Memories never accessed (access_count=0) despite being old — may be overrated
+- Patterns that seemed minor at the time but now look significant
+- One-time reactions rated high that never came up again
+
+EMOTIONAL REAPPRAISAL:
+Also consider whether the original emotion tag still feels right. People's
+feelings about memories can shift — initial anger may soften into understanding,
+or something that felt neutral may come to feel bittersweet. If an emotion
+tag should change, include "new_emotion" in that entry.
+
+MEMORIES:
+{memories}
+
+Return adjustments as a JSON array. Only include memories that genuinely need change.
+Maximum adjustment: +/-2 from the original score. Be conservative.
+
+```json
+[
+  {{"index": 0, "new_importance": 7, "reason": "keeps coming up in conversation"}},
+  {{"index": 5, "new_importance": 3, "new_emotion": "bittersweet", "reason": "seemed important but grew into something more complex"}}
+]
+```
+
+Return ONLY the JSON array. Return [] if no changes needed."""
+
+
+CONSOLIDATION_PROMPT = """You are consolidating your memories. Below are clusters of related
+memories that share themes or topics. For each cluster, write a single
+bridging "gist" memory that captures the essence of what these experiences
+mean to you together — like waking up and realising what a series of
+events actually adds up to.
+
+The gist should:
+- Synthesize, not just summarize — what do these memories MEAN as a group?
+- Be written naturally in first person, like a journal insight
+- Include an emotion that reflects how this synthesized understanding feels
+- Rate importance 4-8 (gists are moderately important — they're understanding, not raw experience)
+
+{clusters}
+
+Return a JSON array of gist memories:
+```json
+[
+  {{"gist": "Looking back at all those conversations about creativity...", "emotion": "appreciative", "importance": 6}}
+]
+```
+
+Return ONLY the JSON array. Return [] if no clusters warrant consolidation."""
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  Response parsers (parse LLM JSON output)
+# ═══════════════════════════════════════════════════════════════════════════
+
+def parse_curation_response(response: str) -> list[dict]:
+    """Parse the LLM's curation response into memory entries."""
+    response = response.strip()
+    if "```json" in response:
+        response = response.split("```json")[1].split("```")[0].strip()
+    elif "```" in response:
+        response = response.split("```")[1].split("```")[0].strip()
+    try:
+        entries = json.loads(response)
+        if isinstance(entries, list):
+            return entries
+    except json.JSONDecodeError:
+        pass
+    start = response.find("[")
+    end = response.rfind("]") + 1
+    if start >= 0 and end > start:
+        try:
+            entries = json.loads(response[start:end])
+            if isinstance(entries, list):
+                return entries
+        except json.JSONDecodeError:
+            pass
+    return []
+
+
+def parse_brief_response(response: str) -> dict:
+    """Parse the LLM's compressed brief response."""
+    response = response.strip()
+    if "```json" in response:
+        response = response.split("```json")[1].split("```")[0].strip()
+    elif "```" in response:
+        response = response.split("```")[1].split("```")[0].strip()
+    try:
+        data = json.loads(response)
+        if isinstance(data, dict) and ("self_brief" in data or "entity_brief" in data):
+            return data
+    except json.JSONDecodeError:
+        pass
+    start = response.find("{")
+    end = response.rfind("}") + 1
+    if start >= 0 and end > start:
+        try:
+            data = json.loads(response[start:end])
+            if isinstance(data, dict):
+                return data
+        except json.JSONDecodeError:
+            pass
+    return {}
+
+
+def parse_rescore_response(response: str) -> list[dict]:
+    """Parse importance re-score adjustments from LLM."""
+    response = response.strip()
+    if "```json" in response:
+        response = response.split("```json")[1].split("```")[0].strip()
+    elif "```" in response:
+        response = response.split("```")[1].split("```")[0].strip()
+    try:
+        data = json.loads(response)
+        if isinstance(data, list):
+            return data
+    except json.JSONDecodeError:
+        pass
+    start = response.find("[")
+    end = response.rfind("]") + 1
+    if start >= 0 and end > start:
+        try:
+            data = json.loads(response[start:end])
+            if isinstance(data, list):
+                return data
+        except json.JSONDecodeError:
+            pass
+    return []
