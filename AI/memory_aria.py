@@ -42,6 +42,71 @@ except ImportError:
 # Minimum word-overlap ratio to consider two memories duplicates
 _DEDUP_THRESHOLD = 0.80
 
+# ── Synonym ring for semantic bridging ─────────────────────────────────────
+# Each group contains words that should match each other during resonance
+# and index lookup.  Kept small and human-curated — no GPU needed.
+_SYNONYM_GROUPS: list[frozenset[str]] = [
+    frozenset({"afraid", "fear", "scared", "frightened", "terrified", "fearful"}),
+    frozenset({"happy", "glad", "joyful", "joyous", "cheerful", "delighted", "pleased"}),
+    frozenset({"sad", "unhappy", "sorrowful", "melancholy", "depressed", "gloomy"}),
+    frozenset({"angry", "furious", "enraged", "irate", "livid", "outraged", "mad"}),
+    frozenset({"anxious", "nervous", "worried", "uneasy", "apprehensive", "tense"}),
+    frozenset({"love", "adore", "cherish", "affection", "devotion", "fondness"}),
+    frozenset({"hate", "loathe", "detest", "despise", "abhor"}),
+    frozenset({"tired", "exhausted", "fatigued", "weary", "drained"}),
+    frozenset({"confused", "bewildered", "perplexed", "puzzled", "baffled"}),
+    frozenset({"lonely", "isolated", "alone", "solitary"}),
+    frozenset({"proud", "pride", "accomplished", "triumphant"}),
+    frozenset({"ashamed", "shame", "embarrassed", "humiliated", "mortified"}),
+    frozenset({"grateful", "thankful", "appreciative", "gratitude"}),
+    frozenset({"jealous", "envious", "envy", "jealousy", "covetous"}),
+    frozenset({"trust", "faith", "confidence", "reliance"}),
+    frozenset({"distrust", "suspicion", "mistrust", "skeptical", "doubtful"}),
+    frozenset({"hopeful", "optimistic", "hope", "expectant"}),
+    frozenset({"hopeless", "despair", "despairing", "despondent"}),
+    frozenset({"calm", "serene", "peaceful", "tranquil", "relaxed"}),
+    frozenset({"excited", "thrilled", "exhilarated", "eager", "enthusiastic"}),
+    frozenset({"bored", "tedious", "monotonous", "uninterested"}),
+    frozenset({"surprised", "astonished", "amazed", "stunned", "shocked"}),
+    frozenset({"disappointed", "letdown", "dissatisfied", "dismayed"}),
+    frozenset({"curious", "inquisitive", "interested", "intrigued"}),
+    frozenset({"guilty", "remorseful", "regretful", "contrite"}),
+    frozenset({"beautiful", "gorgeous", "stunning", "lovely", "attractive"}),
+    frozenset({"ugly", "hideous", "grotesque", "unsightly"}),
+    frozenset({"smart", "intelligent", "clever", "brilliant", "bright"}),
+    frozenset({"stupid", "dumb", "foolish", "idiotic", "ignorant"}),
+    frozenset({"fast", "quick", "rapid", "swift", "speedy"}),
+    frozenset({"slow", "sluggish", "gradual", "leisurely"}),
+    frozenset({"big", "large", "huge", "enormous", "massive", "giant"}),
+    frozenset({"small", "tiny", "little", "minuscule", "miniature"}),
+    frozenset({"important", "crucial", "vital", "essential", "critical", "significant"}),
+    frozenset({"friend", "companion", "buddy", "ally", "pal"}),
+    frozenset({"enemy", "foe", "adversary", "opponent", "rival"}),
+    frozenset({"help", "assist", "support", "aid"}),
+    frozenset({"hurt", "harm", "injure", "wound", "damage"}),
+    frozenset({"begin", "start", "commence", "initiate"}),
+    frozenset({"end", "finish", "conclude", "terminate", "complete"}),
+    frozenset({"create", "build", "construct", "produce"}),
+    frozenset({"destroy", "demolish", "ruin", "wreck", "annihilate"}),
+    frozenset({"remember", "recall", "recollect", "reminisce"}),
+    frozenset({"forget", "overlook", "neglect", "disregard"}),
+]
+
+_SYNONYM_MAP: dict[str, frozenset[str]] = {}
+for _group in _SYNONYM_GROUPS:
+    for _word in _group:
+        _SYNONYM_MAP[_word] = _group - {_word}
+
+
+def _expand_synonyms(words: set[str]) -> set[str]:
+    """Expand a word set with synonyms from the built-in ring."""
+    extra: set[str] = set()
+    for w in words:
+        syns = _SYNONYM_MAP.get(w)
+        if syns:
+            extra |= syns
+    return words | extra
+
 
 def _content_words(text: str) -> set[str]:
     """Extract meaningful lowercase words (4+ chars) from text."""
@@ -471,7 +536,9 @@ class AriaMemory:
     # ─── Add Memories ─────────────────────────────────────────────────
 
     def _index_memory(self, idx: int):
-        """Add a single memory to the inverted index."""
+        """Add a single memory to the inverted index.
+
+        Also indexes synonyms so 'afraid' matches memories about 'fear'."""
         # Guard: ensure index dicts exist (object may bypass __init__)
         if not hasattr(self, '_word_index'):
             self._word_index: dict[str, set[int]] = {}
@@ -479,7 +546,9 @@ class AriaMemory:
         ref = self.self_reflections[idx]
         text = f"{ref.content} {ref.emotion}".lower()
         words = set(re.findall(r"\b[a-zA-Z]{4,}\b", text)) - _RESONANCE_STOP
-        for w in words:
+        # Expand with synonyms so index bridges semantic gaps
+        expanded = _expand_synonyms(words)
+        for w in expanded:
             self._word_index.setdefault(w, set()).add(idx)
             if len(w) >= 5:
                 self._prefix_index.setdefault(w[:5], set()).add(idx)
@@ -1168,6 +1237,8 @@ class AriaMemory:
         if not context_words:
             return []
 
+        # Expand query words with synonyms so 'afraid' finds 'fear' memories
+        context_words = _expand_synonyms(context_words)
         context_prefixes = {w[:5] for w in context_words if len(w) >= 5}
 
         # Get current active set IDs so we don't duplicate
@@ -1299,10 +1370,22 @@ class AriaMemory:
         if background:
             lines.append("=== THINGS I KNOW ABOUT MYSELF (background) ===")
             for r in background:
-                # Compressed: just the first ~60 chars + emotion
-                short = r.content[:60].rstrip() + ("…" if len(r.content) > 60 else "")
-                emotion_tag = f" ({r.emotion})" if r.emotion else ""
-                lines.append(f"· {short}{emotion_tag}")
+                # Structured compression: preserve key facets instead of blind truncation
+                parts = []
+                content = r.content
+                if len(content) > 80:
+                    cut = content[:80].rfind(".")
+                    if cut < 30:
+                        cut = content[:80].rfind(",")
+                    if cut < 30:
+                        cut = content[:80].rfind(" ")
+                    content = content[:max(cut, 30)].rstrip() + "…"
+                parts.append(content)
+                if r.emotion:
+                    parts.append(f"[{r.emotion}]")
+                if r.entity:
+                    parts.append(f"re:{r.entity}")
+                lines.append(f"· {' '.join(parts)}")
             lines.append("")
 
         if current_entity:

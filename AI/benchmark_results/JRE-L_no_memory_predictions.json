@@ -1,0 +1,52 @@
+[
+  {
+    "test_idx": 48,
+    "response": "## New System Aims to Aid Improvisational Quilters\n\nA new system called PatchProv is being developed to support the unique design process of improvisational quilting, a craft where quilters create without pre-defined patterns. Researchers identified key design principles and challenges through a review of quilting resources and developed PatchProv to address them. Initial testing with quilters showed positive reception, suggesting potential for computational tools to enhance improvisational design across various crafts.",
+    "dataset": "JRE-L"
+  },
+  {
+    "test_idx": 665,
+    "response": "## Evaluating AI Collaboration: New Framework for Assessing Creative Partnerships\n\nA new paper proposes a framework for evaluating creativity in \"co-creative\" systems – those where humans and AI collaborate on creative tasks. Researchers highlight the unique challenges of assessing creativity in these partnerships, posing four key questions: who's judging, what's being judged, when, and how. The study found current systems largely prioritize user experience, suggesting borrowing evaluation techniques from autonomous AI could lead to more self-aware and intentional co-creative tools. The research aims to improve how we measure and ultimately enhance the creative potential of human-AI collaboration across fields like art, humor, games, and robotics.",
+    "dataset": "JRE-L"
+  },
+  {
+    "test_idx": 228,
+    "response": "## Robotic Skin Gets Smarter with Self-Healing, AI-Powered Sensors\n\n**Researchers have developed a new system for robotic skin that allows robots to process sensory information locally, potentially leading to faster reactions and greater resilience.** The system utilizes \"memtransistors\"—specialized electronic components—and self-healing materials to create neuromorphic sensors capable of mimicking pain perception and triggering reflexes. This decentralized approach eliminates the need to send large amounts of data to a central processor, reducing latency and improving fault tolerance. The technology demonstrated the ability to associate pain with touch, triggering an escape response in a robotic arm, paving the way for more intelligent and robust robotic systems.",
+    "dataset": "JRE-L"
+  },
+  {
+    "test_idx": 656,
+    "response": "## New Algorithm Offers Breakthrough in Quantum State Tomography\n\nResearchers have developed a novel algorithm for quantum state tomography – a critical process for characterizing quantum computers – that overcomes limitations of existing methods. Published recently, the tool leverages non-convex optimization techniques to efficiently reconstruct quantum states from limited measurements, even in high-dimensional systems. The algorithm demonstrates improved speed and accuracy compared to current state-of-the-art approaches, and crucially, offers a provable guarantee of convergence to the optimal solution under specific conditions, marking a significant advancement in the field.",
+    "dataset": "JRE-L"
+  },
+  {
+    "test_idx": 643,
+    "response": "## AI Models Learn to Connect Images and Speech Without Explicit Training\n\nResearchers have developed neural networks capable of linking spoken words to specific objects within images – all without traditional training labels. The models, detailed in a new paper, learn these audio-visual associations as a side effect of an image-audio retrieval task, directly analyzing raw image pixels and speech waveforms. Analysis using standard datasets (Places 205 and ADE20k) reveals the models effectively learn to identify semantically linked objects and words, suggesting a novel approach to multimodal AI.",
+    "dataset": "JRE-L"
+  },
+  {
+    "test_idx": 470,
+    "response": "## OpenAI Robot Masters Rubik's Cube Using Simulated Training\n\n**San Francisco, CA** - OpenAI researchers have achieved a significant breakthrough in robotics, demonstrating a robot hand capable of solving a Rubik's Cube using a technique trained entirely in simulation. The team's innovation, dubbed \"Automatic Domain Randomization\" (ADR), automatically generates increasingly complex simulated environments, dramatically improving the transfer of learned skills to the real world. \n\nCombined with a custom-built robot platform, ADR enabled the robot to successfully solve the cube, tackling both control and visual perception challenges. The system also showed signs of \"emergent meta-learning,\" suggesting the robot can adapt to new situations. Videos of the robot's impressive feat are available on the OpenAI blog.",
+    "dataset": "JRE-L"
+  },
+  {
+    "test_idx": 618,
+    "response": "## New AI System Approaches Human Lipreading Accuracy\n\nResearchers have developed a new AI system capable of lipreading with significantly improved accuracy, rivaling professional lipreaders in some tests. The system, detailed in a new paper, leverages a massive dataset – 3,886 hours of video – and a novel integrated lipreading architecture.  The system achieved a 40.9% word error rate, outperforming existing lipreading models and nearing the performance of human lipreaders (86.4% - 92.9% WER with contextual information). This marks a major step forward in visual speech recognition technology.",
+    "dataset": "JRE-L"
+  },
+  {
+    "test_idx": 284,
+    "response": "## Information Overload Leads to Isolation, Study Finds\n\n**New research highlights a concerning trend: despite unprecedented access to information, individuals are increasingly isolated within ideological \"echo chambers.\"** The study, titled \"THE PARADOX OF INFORMATION ACCESS,\" argues that the sheer volume of online content – fueled by platforms like Twitter, Instagram, and YouTube – combined with algorithms designed to maximize engagement, leads users to consume only information confirming their existing beliefs. This creates fragmented societies vulnerable to misinformation and further polarization. Researchers identify technical, economic, and psychological factors contributing to this \"paradox of information access\" and suggest avenues for mitigating its effects.",
+    "dataset": "JRE-L"
+  },
+  {
+    "test_idx": 787,
+    "response": "## New Hybrid Printing Method Creates Self-Powered Wearable Sensors\n\nResearchers have developed a novel hybrid printing technique enabling the creation of flexible, self-powered piezoelectric sensors for wearable applications. Published in a recent study, the method combines aerosol jet and extrusion printing to fabricate devices using tellurium nanowires that generate electricity when stressed – eliminating the need for traditional, energy-intensive poling processes. Silver nanowire electrodes, also printed via aerosol jet, provide excellent conductivity and stretchability without requiring heat treatment. The resulting devices, printed directly onto silicone substrates, successfully detected hand gestures and heartbeats on human subjects, paving the way for simpler integration with wearable electronics.",
+    "dataset": "JRE-L"
+  },
+  {
+    "test_idx": 203,
+    "response": "## Quantum Workforce Needs a Boost: Higher Education Must Adapt\n\nA new report highlights a growing skills gap in the burgeoning quantum technology sector. Researchers interviewed 21 U.S. companies and found a pressing need for a workforce trained in quantum sensing, networking, communication, and computing. The study, based on interviews conducted in Fall 2019, details current industry activities, job profiles, and crucial skills, revealing that higher education institutions play a vital, but potentially adaptable, role in preparing students for these emerging careers. The report identifies challenges in training and hiring and suggests ways universities can better align their programs with industry demands to accelerate the commercialization of quantum technologies.",
+    "dataset": "JRE-L"
+  }
+]

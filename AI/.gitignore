@@ -24,3 +24,10 @@
 !memory_snapshots/**
 !standalone memory/
 !standalone memory/**
+!benchmark_vividness.py
+!benchmark_results/
+!benchmark_results/**
+# Exclude memory data stores from benchmark_results
+benchmark_results/*_vividmem_data/
+benchmark_results/*_specmem_data/
+benchmark_results/*_combined_data/

@@ -1,0 +1,40 @@
+{
+  "dataset": "JRE-L",
+  "timestamp": "2026-03-14T21:17:04.602123",
+  "config": {
+    "model": "Gemma-3-12B-IT-Q4_K_M",
+    "ctx_size": 8192,
+    "max_tokens": 1024,
+    "max_train": 30,
+    "max_test": 10
+  },
+  "memory_stats": {
+    "self_reflections": 52,
+    "resonance_hits": 10,
+    "resonance_rate": 1.0
+  },
+  "results": {
+    "no_memory": {
+      "Rouge-L": 0.1732,
+      "BERTScore-F1": 0.8522043347358703,
+      "CLI": 19.234043357758544,
+      "FKGL": 18.198118244355015,
+      "DCRS": 14.676631305018157
+    },
+    "vividness": {
+      "Rouge-L": 0.1620,
+      "BERTScore-F1": 0.8477890074253083,
+      "CLI": 18.644121189996746,
+      "FKGL": 18.166914280233193,
+      "DCRS": 14.27940614430284
+    },
+    "delta": {
+      "Rouge-L": -0.0112,
+      "BERTScore-F1": -0.004415327310562045,
+      "CLI": -0.5899221677617987,
+      "FKGL": -0.031203964121822025,
+      "DCRS": -0.3972251607153172
+    },
+    "note": "Rouge-L recomputed with rouge_score (evaluate pkg had a bug returning 0.0). For readability metrics (CLI, FKGL, DCRS), lower is better."
+  }
+}
