@@ -31,3 +31,5 @@
 benchmark_results/*_vividmem_data/
 benchmark_results/*_specmem_data/
 benchmark_results/*_combined_data/
+
+standalone memory/SpecMem.py
