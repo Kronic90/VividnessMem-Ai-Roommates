@@ -4,6 +4,20 @@ A standalone, zero-dependency memory system for AI agents that gives them genuin
 
 **Single file. No external services. Drop it into any project.**
 
+## Install
+
+```bash
+pip install vividnessmem
+```
+
+For optional AES encryption at rest:
+
+```bash
+pip install vividnessmem[encryption]
+```
+
+Or grab the single file directly from [`AI/standalone memory/VividnessMem.py`](AI/standalone%20memory/VividnessMem.py) — no dependencies required.
+
 ## Why VividnessMem?
 
 Most AI memory systems bolt a vector database onto an LLM and call it a day. That solves retrieval but misses everything that makes memory feel *real*: emotional salience, natural forgetting, mood-dependent recall, contradiction awareness, and the way remembering something changes the memory itself.
@@ -123,8 +137,10 @@ All test code and results are in the [`AI/tests/`](AI/tests/) directory.
 
 ## Quick Start
 
+### Via pip (recommended)
+
 ```python
-from VividnessMem import VividnessMem
+from vividnessmem import VividnessMem
 
 mem = VividnessMem("./my_agent_memory")
 
@@ -152,7 +168,15 @@ context = mem.get_context_block(current_entity="Alex", conversation_context="ast
 mem.save()
 ```
 
-VividnessMem is a single file (`AI/standalone memory/VividnessMem.py`) with zero external dependencies beyond Python's standard library.
+### Via single file
+
+Copy [`VividnessMem.py`](AI/standalone%20memory/VividnessMem.py) into your project and import directly:
+
+```python
+from VividnessMem import VividnessMem
+```
+
+No dependencies beyond Python's standard library.
 
 ## AI Roommates — The Test Environment
 
