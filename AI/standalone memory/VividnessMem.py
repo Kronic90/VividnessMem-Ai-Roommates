@@ -104,17 +104,44 @@ _SYNONYM_GROUPS: list[frozenset[str]] = [
     frozenset({"hurt", "harm", "injure", "wound", "damage"}),
     frozenset({"begin", "start", "commence", "initiate"}),
     frozenset({"end", "finish", "conclude", "terminate", "complete"}),
-    frozenset({"create", "build", "construct", "produce"}),
-    frozenset({"destroy", "demolish", "ruin", "wreck", "annihilate"}),
+    frozenset({"create", "build", "construct", "produce", "generate", "craft"}),
+    frozenset({"destroy", "demolish", "ruin", "wreck", "annihilate", "remove", "purge"}),
     frozenset({"remember", "recall", "recollect", "reminisce"}),
     frozenset({"forget", "overlook", "neglect", "disregard"}),
+    # General-domain synonyms (beyond emotions)
+    frozenset({"weather", "climate", "temperature", "forecast", "meteorological"}),
+    frozenset({"sports", "athletic", "game", "match", "competition", "tournament"}),
+    frozenset({"baseball", "pitching", "batting", "pitcher", "batter", "mound"}),
+    frozenset({"finance", "stock", "market", "trading", "investment", "portfolio"}),
+    frozenset({"crypto", "bitcoin", "cryptocurrency", "blockchain", "ethereum"}),
+    frozenset({"social", "twitter", "reddit", "platform", "trending", "viral"}),
+    frozenset({"music", "song", "album", "artist", "playlist", "track"}),
+    frozenset({"video", "stream", "watch", "youtube", "content", "clip"}),
+    frozenset({"health", "medical", "fitness", "exercise", "wellness", "boxing"}),
+    frozenset({"food", "recipe", "cooking", "cuisine", "meal", "ingredient"}),
+    frozenset({"travel", "flight", "hotel", "booking", "destination", "trip"}),
+    frozenset({"news", "article", "headline", "report", "press", "journalism"}),
+    frozenset({"category", "type", "kind", "sort", "class", "genre"}),
+    frozenset({"ranking", "leaderboard", "standings", "leaders", "stats", "statistics"}),
+    frozenset({"animal", "breed", "species", "pet", "domestic", "wildlife"}),
+    frozenset({"latest", "recent", "current", "newest", "updated"}),
+    frozenset({"popular", "trending", "famous", "viral", "mainstream"}),
+    frozenset({"price", "cost", "rate", "value", "worth", "pricing"}),
+    frozenset({"location", "place", "area", "region", "zone", "locale"}),
+    frozenset({"schedule", "calendar", "timetable", "agenda", "timeline"}),
+    frozenset({"user", "account", "profile", "member", "subscriber"}),
+    frozenset({"search", "find", "locate", "lookup", "query"}),
+    frozenset({"delete", "drop", "erase", "discard"}),
+    frozenset({"update", "modify", "change", "alter", "edit", "revise"}),
 ]
 
 # Build lookup: word → set of synonyms (excluding itself)
 _SYNONYM_MAP: dict[str, frozenset[str]] = {}
 for _group in _SYNONYM_GROUPS:
     for _word in _group:
-        _SYNONYM_MAP[_word] = _group - {_word}
+        # Merge if a word appears in multiple groups (keeps symmetry)
+        existing = _SYNONYM_MAP.get(_word, frozenset())
+        _SYNONYM_MAP[_word] = (existing | _group) - {_word}
 
 
 def _expand_synonyms(words: set[str]) -> set[str]:
@@ -148,14 +175,73 @@ _RESONANCE_STOP = frozenset(
     "them they when will been know really think feel would could also much "
     "some more than very into does doing make made been thing there their "
     "then these those which where while each other another such even "
-    "tell told said says talk talked talking about"
-    " want wanted wants going goes gone come came "
+    "want wanted wants going goes gone come came "
     "still always never sometimes maybe perhaps "
     "today yesterday tomorrow tonight morning evening night "
     "something anything everything nothing "
     "someone anyone everyone nobody "
     "here there everywhere somewhere ".split()
 )
+
+# Short-word preservation — keep 2-3 char tokens that look like meaningful
+# acronyms, codes, or values (API, SQL, US, ERA, 3d, etc.)
+_SHORT_WORD_RE = re.compile(r"\b[A-Za-z0-9]{2,3}\b")
+_SHORT_STOP = frozenset(
+    "the a an is are was were be am do did has had may can its "
+    "and but not for nor yet who how why let try got too few own "
+    "one two all any her him his our you she her its "
+    "said says tell told talk".split()
+)
+
+
+def _extract_short_tokens(text: str) -> set[str]:
+    """Keep 2-3 char tokens that look like acronyms, codes, or values."""
+    return {
+        w.lower() for w in _SHORT_WORD_RE.findall(text)
+        if w.lower() not in _SHORT_STOP
+    }
+
+
+def _resonance_words(text: str) -> set[str]:
+    """Extract words for resonance/indexing — including short tokens.
+
+    Replaces the old `re.findall(r"\b[a-zA-Z]{4,}\b", ...)` pattern.
+    Now also captures 2-3 char acronyms, codes, and abbreviations.
+    """
+    long_words = set(re.findall(r"\b[a-zA-Z]{4,}\b", text.lower())) - _RESONANCE_STOP
+    short_words = _extract_short_tokens(text)
+    return long_words | short_words
+
+
+def _bigrams(text: str) -> set[str]:
+    """Extract contiguous 2-word phrases for phrase-level matching.
+
+    Bigrams capture collocations that single words miss:
+    'heat resistant', 'regular season', 'stock market', etc.
+    """
+    words = [w for w in re.findall(r"\b[a-zA-Z0-9]+\b", text.lower()) if len(w) >= 2]
+    return {f"{words[i]}_{words[i+1]}" for i in range(len(words) - 1)}
+
+
+def _trigrams(text: str) -> set[str]:
+    """Extract contiguous 3-word phrases for phrase-level matching.
+
+    Trigrams capture longer collocations that bigrams miss:
+    'new york city', 'stock market crash', 'machine learning model', etc.
+    """
+    words = [w for w in re.findall(r"\b[a-zA-Z0-9]+\b", text.lower()) if len(w) >= 2]
+    return {f"{words[i]}_{words[i+1]}_{words[i+2]}" for i in range(len(words) - 2)}
+
+
+def _adaptive_floor(top_score: float, base_floor: float) -> float:
+    """Dynamic retrieval floor based on the best match score.
+
+    Strong top match -> higher floor (only return good results).
+    Weak top match -> lower floor (return best-effort results).
+    """
+    if top_score <= 0:
+        return base_floor * 0.5
+    return max(top_score * 0.4, base_floor * 0.5)
 
 
 def _content_words(text: str) -> set[str]:
@@ -365,6 +451,90 @@ class Memory:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+#  ShortTermFact — volatile factual memory with aggressive decay
+# ═══════════════════════════════════════════════════════════════════════════
+
+class ShortTermFact:
+    """A short-lived factual memory with aggressive decay.
+
+    STM captures entity-specific facts (preferences, states, recent events)
+    that are too structured for episodic memory but too volatile to persist
+    as permanent knowledge.  Facts auto-decay and are pruned when faded.
+
+    Examples:
+        ShortTermFact("Scott", "favorite_food", "pizza")
+        ShortTermFact("Luna", "current_mood", "excited about the concert")
+    """
+
+    __slots__ = (
+        "entity", "attribute", "value", "retrieval_tags",
+        "timestamp", "_stability",
+    )
+
+    def __init__(self, entity: str, attribute: str, value: str,
+                 retrieval_tags: list[str] | None = None):
+        self.entity = entity
+        self.attribute = attribute
+        self.value = value
+        self.retrieval_tags = retrieval_tags or self._auto_tag(entity, attribute, value)
+        self.timestamp = datetime.now().isoformat()
+        self._stability = 0.5  # 12 hours until ~50% fade
+
+    @staticmethod
+    def _auto_tag(entity: str, attribute: str, value: str) -> list[str]:
+        """Generate retrieval tags from template patterns.
+
+        Auto-creates tags matching common question patterns so facts
+        surface when users ask about them naturally.
+        """
+        tags: list[str] = []
+        if entity:
+            tags.append(entity.lower())
+        if attribute:
+            tags.append(attribute.lower())
+            # Common question patterns
+            for word in attribute.lower().replace("_", " ").split():
+                if len(word) >= 3 and word not in _RESONANCE_STOP:
+                    tags.append(word)
+        if value:
+            for word in value.lower().split()[:5]:
+                if len(word) >= 3 and word not in _RESONANCE_STOP:
+                    tags.append(word)
+        if entity and attribute:
+            tags.append(f"{entity.lower()}_{attribute.lower()}")
+        return tags
+
+    @property
+    def vividness(self) -> float:
+        """How fresh this fact is — decays aggressively."""
+        age_days = (datetime.now()
+                    - datetime.fromisoformat(self.timestamp)
+                    ).total_seconds() / 86400
+        return math.exp(-age_days / max(self._stability, 0.01))
+
+    def to_dict(self) -> dict:
+        return {
+            "entity": self.entity,
+            "attribute": self.attribute,
+            "value": self.value,
+            "retrieval_tags": self.retrieval_tags,
+            "timestamp": self.timestamp,
+            "stability": self._stability,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "ShortTermFact":
+        obj = cls.__new__(cls)
+        obj.entity = d.get("entity", "")
+        obj.attribute = d.get("attribute", "")
+        obj.value = d.get("value", "")
+        obj.retrieval_tags = d.get("retrieval_tags", [])
+        obj.timestamp = d.get("timestamp", datetime.now().isoformat())
+        obj._stability = d.get("stability", 0.5)
+        return obj
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 #  VividnessMem — the main memory system
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -412,11 +582,18 @@ class VividnessMem:
         self._word_index:   dict[str, set[int]] = {}
         self._prefix_index: dict[str, set[int]] = {}
 
+        # Short-term facts (aggressive decay, structured)
+        self._stm: list[ShortTermFact] = []
+
+        # Co-occurrence graph for learned associations
+        self._cooccurrence: dict[str, dict[str, int]] = {}
+
         # Compressed brief data (self-summary, entity summaries, session counter)
         self._brief_data: dict = {
             "session_count": 0,
             "self_brief": "",
             "entity_briefs": {},
+            "entity_preferences": {},   # {entity: {category: [{item, sentiment, timestamp}]}}
             "relationship_arcs": {},   # {entity: {trajectory, history, ...}}
             "dream_log": [],            # list of dream connection records
         }
@@ -503,25 +680,69 @@ class VividnessMem:
     def _index_memory(self, idx: int, mem: Memory):
         """Add a single memory to the inverted word/prefix indices.
 
-        Also indexes synonyms so 'afraid' matches memories about 'fear'."""
+        Also indexes synonyms so 'afraid' matches memories about 'fear'.
+        Also indexes bigrams and trigrams for phrase-level matching."""
         if not hasattr(self, '_word_index'):
             self._word_index = {}
             self._prefix_index = {}
-        text = f"{mem.content} {mem.emotion}".lower()
-        words = set(re.findall(r"\b[a-zA-Z]{4,}\b", text)) - _RESONANCE_STOP
+        text = f"{mem.content} {mem.emotion}"
+        words = _resonance_words(text)
         # Expand with synonyms so index bridges semantic gaps
         expanded = _expand_synonyms(words)
         for w in expanded:
             self._word_index.setdefault(w, set()).add(idx)
             if len(w) >= 5:
                 self._prefix_index.setdefault(w[:5], set()).add(idx)
+        # Bigram index for phrase-level matching
+        for bg in _bigrams(text):
+            self._word_index.setdefault(bg, set()).add(idx)
+        # Trigram index for longer phrase matching
+        for tg in _trigrams(text):
+            self._word_index.setdefault(tg, set()).add(idx)
+        # Update co-occurrence graph
+        self._update_cooccurrence(expanded)
 
     def _rebuild_index(self):
         """Rebuild the full inverted index from scratch."""
         self._word_index.clear()
         self._prefix_index.clear()
+        self._cooccurrence.clear()
         for i, mem in enumerate(self.self_reflections):
             self._index_memory(i, mem)
+
+    # ── Co-occurrence graph (learned associations) ────────────────────
+
+    def _update_cooccurrence(self, words: set[str]):
+        """Track which content words appear together in memories."""
+        if not hasattr(self, '_cooccurrence'):
+            self._cooccurrence = {}
+        word_list = sorted(words)[:30]  # cap to avoid O(n^2) explosion
+        for i, w1 in enumerate(word_list):
+            for w2 in word_list[i + 1:]:
+                self._cooccurrence.setdefault(w1, {})
+                self._cooccurrence[w1][w2] = self._cooccurrence[w1].get(w2, 0) + 1
+                self._cooccurrence.setdefault(w2, {})
+                self._cooccurrence[w2][w1] = self._cooccurrence[w2].get(w1, 0) + 1
+
+    def _expand_via_cooccurrence(self, words: set[str], top_k: int = 10) -> set[str]:
+        """Find terms most associated with query words through co-occurrence.
+
+        This is learned query expansion: if 'pizza' and 'favorite' always
+        appear in the same memories, querying 'pizza' also finds memories
+        mentioning 'favorite' even without that exact word in the query.
+        """
+        if not hasattr(self, '_cooccurrence'):
+            return set()
+        scores: dict[str, float] = {}
+        for w in words:
+            neighbors = self._cooccurrence.get(w, {})
+            for neighbor, weight in neighbors.items():
+                if neighbor not in words and weight >= 2:
+                    scores[neighbor] = scores.get(neighbor, 0) + weight
+        if not scores:
+            return set()
+        sorted_terms = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+        return {term for term, _ in sorted_terms[:top_k]}
 
     # ── Add memories ──────────────────────────────────────────────────
 
@@ -611,13 +832,9 @@ class VividnessMem:
 
         # Touch dampener — only reinforce memories relevant to context
         if context:
-            ctx_words = {
-                w for w in re.findall(r"\b[a-zA-Z]{4,}\b", context.lower())
-            } - _RESONANCE_STOP
+            ctx_words = _resonance_words(context)
             for mem in active:
-                mem_words = set(re.findall(
-                    r"\b[a-zA-Z]{4,}\b",
-                    f"{mem.content} {mem.emotion}".lower()))
+                mem_words = _resonance_words(f"{mem.content} {mem.emotion}")
                 if ctx_words & mem_words:
                     mem.touch()
         else:
@@ -640,18 +857,14 @@ class VividnessMem:
         if not context:
             return active, []
 
-        ctx_words = {
-            w for w in re.findall(r"\b[a-zA-Z]{4,}\b", context.lower())
-        } - _RESONANCE_STOP
+        ctx_words = _resonance_words(context)
 
         if not ctx_words:
             return active, []
 
         foreground, background = [], []
         for mem in active:
-            mem_words = set(re.findall(
-                r"\b[a-zA-Z]{4,}\b",
-                f"{mem.content} {mem.emotion}".lower()))
+            mem_words = _resonance_words(f"{mem.content} {mem.emotion}")
             if ctx_words & mem_words:
                 foreground.append(mem)
             else:
@@ -735,6 +948,115 @@ class VividnessMem:
         else:
             self._absorb_mood_from_memories()
 
+    # ── Short-term memory (STM) ───────────────────────────────────────
+
+    def add_fact(self, entity: str, attribute: str, value: str,
+                 retrieval_tags: list[str] | None = None) -> ShortTermFact:
+        """Store a short-term fact about an entity.
+
+        Facts decay quickly but are auto-included in retrieval when
+        the entity is mentioned.  Deduplicates by entity+attribute.
+
+        Examples:
+            mem.add_fact("Scott", "favorite_food", "pizza")
+            mem.add_fact("Luna", "current_mood", "excited")
+        """
+        if not hasattr(self, '_stm'):
+            self._stm = []
+        # Deduplicate: update existing fact for same entity+attribute
+        for i, existing in enumerate(self._stm):
+            if (existing.entity.lower() == entity.lower()
+                    and existing.attribute.lower() == attribute.lower()):
+                self._stm[i] = ShortTermFact(entity, attribute, value, retrieval_tags)
+                return self._stm[i]
+        fact = ShortTermFact(entity, attribute, value, retrieval_tags)
+        self._stm.append(fact)
+        return fact
+
+    def get_facts(self, entity: str = "", context: str = "") -> list[ShortTermFact]:
+        """Retrieve relevant short-term facts.
+
+        If entity is provided, returns facts for that entity.
+        If context is provided, matches against retrieval tags.
+        Filters out faded facts (vividness < 0.1).
+        """
+        if not hasattr(self, '_stm'):
+            self._stm = []
+        # Prune faded facts
+        self._stm = [f for f in self._stm if f.vividness >= 0.1]
+
+        results: list[ShortTermFact] = []
+        context_words = _resonance_words(context) if context else set()
+
+        for fact in self._stm:
+            if entity and fact.entity.lower() == entity.lower():
+                results.append(fact)
+            elif context_words:
+                tag_set = set(fact.retrieval_tags)
+                if context_words & tag_set:
+                    results.append(fact)
+
+        results.sort(key=lambda f: f.vividness, reverse=True)
+        return results
+
+    def get_stm_context(self, entity: str = "", context: str = "") -> str:
+        """Build a context string from short-term facts."""
+        facts = self.get_facts(entity=entity, context=context)
+        if not facts:
+            return ""
+        lines = ["=== RECENT FACTS I REMEMBER ==="]
+        for f in facts[:10]:
+            lines.append(f"  {f.entity}'s {f.attribute}: {f.value}")
+        return "\n".join(lines)
+
+    # ── Entity Preferences ────────────────────────────────────────────
+
+    def update_entity_preference(self, entity: str, category: str,
+                                 item: str, sentiment: str = "likes"):
+        """Store a structured preference for an entity.
+
+        Examples:
+            mem.update_entity_preference("Scott", "food", "pizza", "likes")
+            mem.update_entity_preference("Scott", "hobby", "boxing", "likes")
+            mem.update_entity_preference("Scott", "music", "country", "dislikes")
+        """
+        prefs = self._brief_data.setdefault("entity_preferences", {})
+        if entity not in prefs:
+            prefs[entity] = {}
+        if category not in prefs[entity]:
+            prefs[entity][category] = []
+        # Avoid duplicates
+        for existing in prefs[entity][category]:
+            if existing.get("item", "").lower() == item.lower():
+                existing["sentiment"] = sentiment
+                self._save_brief()
+                return
+        prefs[entity][category].append({
+            "item": item,
+            "sentiment": sentiment,
+            "timestamp": datetime.now().isoformat(),
+        })
+        self._save_brief()
+
+    def get_entity_preferences(self, entity: str) -> dict:
+        """Return all known preferences for an entity."""
+        return self._brief_data.get("entity_preferences", {}).get(entity, {})
+
+    def get_preference_context(self, entity: str) -> str:
+        """Build a context string about an entity's known preferences."""
+        prefs = self.get_entity_preferences(entity)
+        if not prefs:
+            return ""
+        lines = [f"=== WHAT I KNOW ABOUT {entity.upper()}'S PREFERENCES ==="]
+        for category, items in prefs.items():
+            likes = [i["item"] for i in items if i.get("sentiment") == "likes"]
+            dislikes = [i["item"] for i in items if i.get("sentiment") == "dislikes"]
+            if likes:
+                lines.append(f"  {category}: likes {', '.join(likes)}")
+            if dislikes:
+                lines.append(f"  {category}: dislikes {', '.join(dislikes)}")
+        return "\n".join(lines)
+
     # ── Association graph ─────────────────────────────────────────────
 
     def _build_association_edges(self) -> dict[int, dict[int, int]]:
@@ -744,8 +1066,7 @@ class VividnessMem:
         """
         n = len(self.self_reflections)
         word_sets = [
-            set(re.findall(r"\b[a-zA-Z]{4,}\b",
-                           f"{r.content} {r.emotion}".lower())) - _RESONANCE_STOP
+            _resonance_words(f"{r.content} {r.emotion}")
             for r in self.self_reflections
         ]
         edges: dict[int, dict[int, int]] = {i: {} for i in range(n)}
@@ -1240,23 +1561,26 @@ class VividnessMem:
     def resonate(self, context: str, limit: int | None = None) -> list[Memory]:
         """Find old faded memories that resonate with current conversation.
 
-        Uses the inverted index for O(k) lookup. Dynamic limit based on
-        RESONANCE_SCORE_FLOOR — strong multi-match queries surface more
-        memories; weak queries don't waste slots.
+        Uses the inverted index for O(k) lookup plus co-occurrence graph
+        expansion for learned associations.  Adaptive floor adjusts based
+        on match quality.
         """
         hard_cap = max(limit or self.RESONANCE_LIMIT, self.RESONANCE_LIMIT + 3)
         if not context or not self.self_reflections:
             return []
 
-        context_words = {
-            w for w in re.findall(r"\b[a-zA-Z]{4,}\b", context.lower())
-        } - _RESONANCE_STOP
+        context_words = _resonance_words(context)
         if not context_words:
             return []
 
         # Expand query words with synonyms so 'afraid' finds 'fear' memories
         context_words = _expand_synonyms(context_words)
         context_prefixes = {w[:5] for w in context_words if len(w) >= 5}
+        context_bigrams = _bigrams(context)
+        context_trigrams = _trigrams(context)
+
+        # Co-occurrence expansion: find candidates through learned associations
+        cooc_terms = self._expand_via_cooccurrence(context_words)
 
         active_set = set(
             id(r) for r in sorted(
@@ -1277,6 +1601,9 @@ class VividnessMem:
             candidate_indices |= self._word_index.get(w, set())
         for p in context_prefixes:
             candidate_indices |= self._prefix_index.get(p, set())
+        # Co-occurrence expanded terms (learned associations)
+        for w in cooc_terms:
+            candidate_indices |= self._word_index.get(w, set())
 
         scored: list[tuple[float, int, Memory]] = []
         seed_indices: list[int] = []
@@ -1288,12 +1615,22 @@ class VividnessMem:
                 continue
 
             mem_text = f"{ref.content} {ref.emotion}".lower()
-            mem_words = set(re.findall(r"\b[a-zA-Z]{4,}\b", mem_text))
+            mem_words = _resonance_words(mem_text)
             mem_prefixes = {w[:5] for w in mem_words if len(w) >= 5}
 
             exact_overlap = len(context_words & mem_words)
             prefix_overlap = len(context_prefixes & mem_prefixes)
             total_overlap = max(exact_overlap, prefix_overlap)
+
+            # Bigram (phrase) matching bonus
+            mem_bigs = _bigrams(mem_text)
+            bigram_hits = len(context_bigrams & mem_bigs)
+            total_overlap += bigram_hits * 2  # phrases worth double
+
+            # Trigram (longer phrase) matching bonus
+            mem_trigs = _trigrams(mem_text)
+            trigram_hits = len(context_trigrams & mem_trigs)
+            total_overlap += trigram_hits * 3  # long phrases worth triple
 
             if total_overlap >= 1:
                 score = total_overlap + (ref.importance * 0.2)
@@ -1302,11 +1639,20 @@ class VividnessMem:
 
         scored.sort(key=lambda x: x[0], reverse=True)
 
+        # Adaptive floor based on best match quality
+        top_score = scored[0][0] if scored else 0.0
+        floor = _adaptive_floor(top_score, self.RESONANCE_SCORE_FLOOR)
+
         resonant: list[Memory] = []
         for score, idx, ref in scored:
             if len(resonant) >= hard_cap:
                 break
-            if score >= self.RESONANCE_SCORE_FLOOR:
+            if score >= floor:
+                resonant.append(ref)
+
+        # If nothing passed the adaptive floor, return best-effort
+        if not resonant and scored:
+            for score, idx, ref in scored[:hard_cap]:
                 resonant.append(ref)
 
         # Associative chain expansion
@@ -1315,8 +1661,8 @@ class VividnessMem:
             resonant_ids = {id(r) for r in resonant} | active_set
             for a in associated:
                 if id(a) not in resonant_ids and len(resonant) < hard_cap:
-                    a_words = set(re.findall(r"\b[a-zA-Z]{4,}\b",
-                                             f"{a.content} {a.emotion}".lower()))
+                    a_words = _resonance_words(
+                        f"{a.content} {a.emotion}".lower())
                     a_prefixes = {w[:5] for w in a_words if len(w) >= 5}
                     if (context_words & a_words) or (context_prefixes & a_prefixes):
                         resonant.append(a)
@@ -1364,6 +1710,20 @@ class VividnessMem:
                 lines.append(f"=== MY UNDERSTANDING OF {current_entity.upper()} ===")
                 lines.append(entity_brief)
                 lines.append("")
+
+        # Entity preferences (structured likes/dislikes)
+        if current_entity:
+            pref_ctx = self.get_preference_context(current_entity)
+            if pref_ctx:
+                lines.append(pref_ctx)
+                lines.append("")
+
+        # Short-term facts
+        stm_ctx = self.get_stm_context(
+            entity=current_entity, context=conversation_context)
+        if stm_ctx:
+            lines.append(stm_ctx)
+            lines.append("")
 
         foreground, background = self.partition_active_self(context=conversation_context)
         if foreground:
@@ -1443,6 +1803,18 @@ class VividnessMem:
             self._write_json(self.social_dir / fname,
                              [r.to_dict() for r in impressions])
 
+        # Persist short-term memory
+        stm_file = self.data_dir / "stm.json"
+        if hasattr(self, '_stm') and self._stm:
+            self._write_json(stm_file, [f.to_dict() for f in self._stm])
+        elif stm_file.exists():
+            stm_file.unlink()
+
+        # Persist co-occurrence graph
+        cooc_file = self.data_dir / "cooccurrence.json"
+        if hasattr(self, '_cooccurrence') and self._cooccurrence:
+            self._write_json(cooc_file, self._cooccurrence)
+
     def _load(self):
         if self.self_file.exists():
             try:
@@ -1482,6 +1854,27 @@ class VividnessMem:
                     ]
                 except Exception as e:
                     print(f"[VividnessMem] Warning: corrupt {fpath.name}, skipping ({e})")
+
+        # Load short-term memory
+        stm_file = self.data_dir / "stm.json"
+        if stm_file.exists():
+            try:
+                data = self._read_json(stm_file)
+                if isinstance(data, list):
+                    self._stm = [ShortTermFact.from_dict(d) for d in data
+                                 if isinstance(d, dict)]
+            except Exception:
+                self._stm = []
+
+        # Load co-occurrence graph
+        cooc_file = self.data_dir / "cooccurrence.json"
+        if cooc_file.exists():
+            try:
+                data = self._read_json(cooc_file)
+                if isinstance(data, dict):
+                    self._cooccurrence = data
+            except Exception:
+                pass
 
     # ── Brief & maintenance ───────────────────────────────────────────
 
@@ -1908,3 +2301,40 @@ def parse_rescore_response(response: str) -> list[dict]:
         except json.JSONDecodeError:
             pass
     return []
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  LLM Query Expansion (optional — call before resonate for richer results)
+# ═══════════════════════════════════════════════════════════════════════════
+
+QUERY_EXPANSION_PROMPT = """Restate the following query using different words.
+Give 3 alternative phrasings that mean the same thing but use different
+vocabulary. Return ONLY the 3 alternatives, one per line, no numbering.
+
+Query: {query}"""
+
+
+def expand_query(llm_fn, query: str) -> str:
+    """Use an LLM to expand a query with alternative phrasings.
+
+    Parameters
+    ----------
+    llm_fn : callable
+        Function that takes a prompt string and returns a response string.
+    query : str
+        The original search query.
+
+    Returns
+    -------
+    str
+        The original query plus LLM-generated alternative phrasings,
+        concatenated for broader retrieval coverage.
+    """
+    try:
+        prompt = QUERY_EXPANSION_PROMPT.format(query=query)
+        response = llm_fn(prompt)
+        if response and isinstance(response, str):
+            return f"{query} {response.strip()}"
+    except Exception:
+        pass
+    return query
