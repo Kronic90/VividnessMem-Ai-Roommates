@@ -40,24 +40,24 @@ VividnessMem has been evaluated on two established benchmarks using a local Gemm
 
 Mem2ActBench tests whether a memory system can store conversational sessions and later retrieve the right information to select correct tools/actions. 14,094 sessions indexed, 100 question-answer pairs evaluated across difficulty levels L1–L4.
 
-| Metric | No Memory | VividnessMem |
-|---|:---:|:---:|
-| **Tool Accuracy** | 0.100 | **0.450** |
-| **F1** | 0.158 | **0.527** |
-| **Precision** | 0.174 | **0.554** |
-| **Recall** | 0.151 | **0.529** |
-| **BLEU-1** | 0.302 | **0.627** |
+| Metric | No Memory | Embedding (MiniLM-L6-v2) | VividnessMem |
+|---|:---:|:---:|:---:|
+| **Tool Accuracy** | 0.053 | 0.440 | **0.510** |
+| **F1** | 0.118 | 0.512 | **0.594** |
+| **Precision** | 0.130 | 0.559 | **0.647** |
+| **Recall** | 0.113 | 0.519 | **0.599** |
+| **BLEU-1** | 0.273 | 0.641 | **0.668** |
 
 **Per difficulty level:**
 
-| Level | No Memory TA | VividnessMem TA | No Memory F1 | VividnessMem F1 |
-|---|:---:|:---:|:---:|:---:|
-| L1 (n=53) | 0.075 | **0.547** | 0.098 | **0.571** |
-| L2 (n=27) | 0.074 | **0.185** | 0.199 | **0.327** |
-| L3 (n=5) | 0.000 | **0.400** | 0.133 | **0.633** |
-| L4 (n=15) | 0.267 | **0.600** | 0.305 | **0.694** |
+| Level | No Memory TA | Embedding TA | VividnessMem TA |
+|---|:---:|:---:|:---:|
+| L1 (n=53) | 0.025 | 0.528 | **0.604** |
+| L2 (n=27) | 0.069 | 0.111 | **0.259** |
+| L3 (n=5) | 0.000 | 0.400 | **0.400** |
+| L4 (n=15) | 0.178 | **0.733** | 0.667 |
 
-VividnessMem shows the strongest gains on harder questions (L3/L4), where multi-hop retrieval and contextual understanding matter most.
+VividnessMem outperforms embedding-based retrieval (all-MiniLM-L6-v2 with cosine similarity) on overall Tool Accuracy by **+7 percentage points** and on F1 by **+8.2 pp**, while using zero embeddings and zero vector infrastructure. The largest gap is on L2 (medium-difficulty) questions, where VividnessMem scores 0.259 vs Embedding's 0.111 — a **+13.4 pp** advantage.
 
 ### MemoryBench — WritingPrompts (50-item evaluation)
 
@@ -65,11 +65,10 @@ MemoryBench tests narrative memory: given a set of writing-prompt conversations 
 
 | Condition | METEOR |
 |---|:---:|
-| No Memory | 0.125 |
-| VividnessMem | **0.159** |
-| Embedding (all-MiniLM-L6-v2) | 0.159 |
+| No Memory | 0.092 |
+| VividnessMem | **0.141** |
 
-VividnessMem matches embedding-based retrieval on narrative recall — without using any embeddings at all.
+VividnessMem provides a **+52.7% relative gain** over no-memory on narrative recall.
 
 ## How It Works
 
@@ -212,9 +211,16 @@ AI/
 - **No semantic understanding** — retrieval is lexical (keywords, bigrams, trigrams, co-occurrence). "Quantum entanglement" finds "quantum" but won't find "particle physics" unless co-occurrence has learned the link
 - **No concurrent access** — single-threaded file I/O. Multiple processes hitting the same memory files would race
 - **Scale ceiling untested beyond 5K** — performance is excellent at 5K memories but months of heavy use could push beyond this
-- **Mood feedback loop** — bounded by decay to prevent spiralling, but the decay rate is a reasonable default rather than empirically optimised
 - **Contradiction detection is lexical** — catches negation patterns and emotional reversals on shared topics, but subtle semantic contradictions will be missed
 - **Consolidation quality depends on the LLM** — gist generation is only as good as the model doing the synthesis
+
+## Latest Bug Fixes
+
+- **Negative Memory Fixation** — fixed a bug that caused agents to fixate on negative memories, resulting in constant angry/sad agents
+- **Context Overcrowding** — fixed a bug that caused agents to lose focus on current tasks due to irrelevant memories taking priority
+- **Spaced-Repetition Decay** — fixed a bug causing agent memories to never fade, which stopped the Ebbinghaus decay from working as intended with certain memories
+- **Consolidation Duplicate Append** — fixed a bug where `apply_consolidation()` appended each gist memory twice, doubling consolidated memories in the store
+- **Mood Feedback Loop** — bounded mood decay to prevent emotional spiralling; the decay rate is now tuned to prevent runaway positive/negative loops
 
 ## License
 

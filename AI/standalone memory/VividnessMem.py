@@ -1326,14 +1326,6 @@ class VividnessMem:
                 why_saved="Synthesized from related experiences during memory consolidation",
             ))
 
-            self.self_reflections.append(Memory(
-                content=content,
-                emotion=g.get("emotion", "understanding"),
-                importance=g.get("importance", 6),
-                source="consolidation",
-                why_saved="Synthesized from related experiences during memory consolidation",
-            ))
-
     # ── Memory Dreaming (between-session cross-memory pattern discovery) ──
 
     def needs_dream(self) -> bool:
