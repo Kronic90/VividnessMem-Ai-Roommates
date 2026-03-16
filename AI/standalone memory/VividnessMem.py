@@ -318,6 +318,12 @@ EMOTION_VECTORS: dict[str, tuple[float, float, float]] = {
 INITIAL_STABILITY = 3.0   # days before first ~50 % fade
 SPACING_BONUS    = 1.8    # multiplier per well-spaced touch
 MIN_SPACING_DAYS = 0.5    # touches closer than this don't boost stability
+STABILITY_CAP    = 180.0  # hard ceiling — no memory is forever
+DIMINISHING_RATE = 0.85   # each successive touch gives less stability boost
+
+# ── Emotional reappraisal constants ───────────────────────────────────────
+NEGATIVE_HALFLIFE_DAYS = 14.0  # negative mood-congruence boost halves every N days
+MAX_NEGATIVE_BOOST     = 0.10  # cap on mood-congruence boost for negative memories
 
 # ── Association & brief constants ─────────────────────────────────────────
 ASSOCIATION_HOPS       = 2
@@ -379,13 +385,19 @@ class Memory:
 
     # ── spaced-repetition touch ───────────────────────────────────────
     def touch(self):
-        """Record an access. Well-spaced touches increase stability."""
+        """Record an access. Well-spaced touches increase stability.
+
+        Stability has diminishing returns (each touch adds less) and a
+        hard cap so no memory becomes permanently immune to decay.
+        """
         now = datetime.now()
         last = datetime.fromisoformat(self._last_access)
         gap_days = (now - last).total_seconds() / 86400
 
         if gap_days >= MIN_SPACING_DAYS:
-            self._stability *= SPACING_BONUS
+            # Diminishing returns: bonus shrinks with repeated access
+            effective_bonus = 1.0 + (SPACING_BONUS - 1.0) * (DIMINISHING_RATE ** self._access_count)
+            self._stability = min(self._stability * effective_bonus, STABILITY_CAP)
         self._access_count += 1
         self._last_access = now.isoformat()
 
@@ -399,14 +411,37 @@ class Memory:
         return self.importance * retention
 
     def mood_adjusted_vividness(self, mood_vector: tuple[float, float, float]) -> float:
-        """Vividness boosted when memory emotion matches current mood."""
+        """Vividness boosted when memory emotion matches current mood.
+
+        Grudge-bug fix: negative-valence memories have their congruence
+        boost *capped* and *decayed* over time (emotional reappraisal).
+        This prevents a negative-mood spiral from locking the agent into
+        perpetual anger/sadness.
+        """
         base = self.vividness
         mem_vec = _emotion_to_vector(self.emotion)
         if not mem_vec or mood_vector == (0.0, 0.0, 0.0):
             return base
         dot = sum(a * b for a, b in zip(mem_vec, mood_vector))
-        # boost range: 0.85 – 1.15
-        return base * (1.0 + 0.15 * max(-1.0, min(1.0, dot)))
+        clamped = max(-1.0, min(1.0, dot))
+
+        # ── Emotional reappraisal for negative memories ──────────────
+        # If both the memory and mood are negative-valence and the dot
+        # is positive (congruence boost), apply two dampeners:
+        #   1. Cap the boost at MAX_NEGATIVE_BOOST (lower than the
+        #      normal ±0.15)
+        #   2. Decay the boost with the memory's age so old grudges
+        #      lose their mood-amplification power over time.
+        mem_valence = mem_vec[0]           # pleasure axis: <0 = negative
+        mood_valence = mood_vector[0]
+        if mem_valence < 0 and mood_valence < 0 and clamped > 0:
+            age_days = (datetime.now()
+                        - datetime.fromisoformat(self.timestamp)
+                        ).total_seconds() / 86400
+            reappraisal = math.exp(-age_days / (NEGATIVE_HALFLIFE_DAYS / math.log(2)))
+            clamped = min(clamped, MAX_NEGATIVE_BOOST) * reappraisal
+
+        return base * (1.0 + 0.15 * clamped)
 
     @property
     def content_words(self) -> set[str]:
@@ -819,15 +854,37 @@ class VividnessMem:
     def get_active_self(self, context: str = "") -> list[Memory]:
         """Return the most vivid self-memories, mood-weighted.
 
+        Context-overcrowding fix: when a conversation context is provided,
+        memories are scored by *both* vividness and topical relevance so
+        that highly-vivid-but-irrelevant memories don't crowd out on-topic
+        ones.  Without context, pure vividness ranking is kept.
+
         Touch dampener: memories only get reinforced (touch) if they share
-        at least one context word with the current conversation.  This
-        prevents every recall from blindly boosting the top-N.
+        at least one context word with the current conversation.
         """
-        ranked = sorted(
-            self.self_reflections,
-            key=lambda r: r.mood_adjusted_vividness(self._mood),
-            reverse=True,
-        )
+        if context:
+            ctx_words = _resonance_words(context)
+            ctx_words_expanded = _expand_synonyms(ctx_words)
+
+            def _relevance_weighted(mem: Memory) -> float:
+                base = mem.mood_adjusted_vividness(self._mood)
+                if not ctx_words_expanded:
+                    return base
+                mem_words = _resonance_words(f"{mem.content} {mem.emotion}")
+                overlap = len(ctx_words_expanded & mem_words)
+                # relevance multiplier: 1.0 (no match) to 2.0 (strong match)
+                relevance = 1.0 + min(overlap / max(len(ctx_words_expanded), 1), 1.0)
+                return base * relevance
+
+            ranked = sorted(self.self_reflections,
+                            key=_relevance_weighted, reverse=True)
+        else:
+            ranked = sorted(
+                self.self_reflections,
+                key=lambda r: r.mood_adjusted_vividness(self._mood),
+                reverse=True,
+            )
+
         active = ranked[:self.ACTIVE_SELF_LIMIT]
 
         # Touch dampener — only reinforce memories relevant to context
@@ -851,6 +908,9 @@ class VividnessMem:
         Background: remaining active memories — shown as compressed
         one-liners to save tokens while preserving awareness.
 
+        Context-overcrowding fix: background list is trimmed so that
+        irrelevant memories don't consume the context window.
+
         If no context is provided, everything goes to foreground.
         """
         active = self.get_active_self(context=context)
@@ -858,6 +918,7 @@ class VividnessMem:
             return active, []
 
         ctx_words = _resonance_words(context)
+        ctx_words_expanded = _expand_synonyms(ctx_words) if ctx_words else set()
 
         if not ctx_words:
             return active, []
@@ -865,7 +926,7 @@ class VividnessMem:
         foreground, background = [], []
         for mem in active:
             mem_words = _resonance_words(f"{mem.content} {mem.emotion}")
-            if ctx_words & mem_words:
+            if ctx_words_expanded & mem_words:
                 foreground.append(mem)
             else:
                 background.append(mem)
@@ -873,6 +934,11 @@ class VividnessMem:
         # If nothing matched, put top 3 in foreground anyway
         if not foreground and active:
             return active[:3], active[3:]
+
+        # Trim background to at most half the foreground count to prevent
+        # irrelevant memories from overwhelming the context window.
+        max_bg = max(len(foreground) // 2, 1)
+        background = background[:max_bg]
 
         return foreground, background
 
