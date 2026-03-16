@@ -216,6 +216,12 @@ AI/
 - **Contradiction detection is lexical** — catches negation patterns and emotional reversals on shared topics, but subtle semantic contradictions will be missed
 - **Consolidation quality depends on the LLM** — gist generation is only as good as the model doing the synthesis
 
+## Latest Bug Fixes
+- **Negative Memory Fixation** - fixed a bug that caused agents to fixate on negative memories, resulting in constant angry/sad agents
+- **Context Overcrowding** - fixed a bug that causes agent to lose focus on current tasks due to irrelevant memories taking priority
+- **Spaced-Repetion** - Fixed a bug causing agents memories to never fade, this stopped the Ebbinghaus decay from working as intended with certain memories
+
+
 ## License
 
 MIT
