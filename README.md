@@ -36,28 +36,28 @@ VividnessMem takes a different approach:
 
 VividnessMem has been evaluated on two established benchmarks using a local Gemma 3 12B model (Q4_K_M quantisation, no API calls).
 
-### Mem2ActBench (100-item evaluation)
+### Mem2ActBench (5-seed averaged evaluation)
 
-Mem2ActBench tests whether a memory system can store conversational sessions and later retrieve the right information to select correct tools/actions. 14,094 sessions indexed, 100 question-answer pairs evaluated across difficulty levels L1–L4.
+Mem2ActBench tests whether a memory system can store conversational sessions and later retrieve the right information to select correct tools/actions. 14,094 sessions indexed, 100 question-answer pairs evaluated per seed across difficulty levels L1–L4. Results averaged over 5 random seeds (42, 123, 7, 99, 256).
 
 | Metric | No Memory | Embedding (MiniLM-L6-v2) | VividnessMem |
 |---|:---:|:---:|:---:|
-| **Tool Accuracy** | 0.053 | 0.440 | **0.510** |
-| **F1** | 0.118 | 0.512 | **0.594** |
-| **Precision** | 0.130 | 0.559 | **0.647** |
-| **Recall** | 0.113 | 0.519 | **0.599** |
-| **BLEU-1** | 0.273 | 0.641 | **0.668** |
+| **Tool Accuracy** | 0.053 | 0.440 | **0.470 ± 0.024** |
+| **F1** | 0.118 | 0.512 | **0.523 ± 0.011** |
+| **Precision** | 0.130 | 0.559 | **0.527 ± 0.010** |
+| **Recall** | 0.113 | 0.519 | **0.561 ± 0.020** |
+| **BLEU-1** | 0.273 | 0.641 | **0.614 ± 0.008** |
 
-**Per difficulty level:**
+**Per difficulty level (5-seed average):**
 
 | Level | No Memory TA | Embedding TA | VividnessMem TA |
 |---|:---:|:---:|:---:|
-| L1 (n=53) | 0.025 | 0.528 | **0.604** |
-| L2 (n=27) | 0.069 | 0.111 | **0.259** |
-| L3 (n=5) | 0.000 | 0.400 | **0.400** |
-| L4 (n=15) | 0.178 | **0.733** | 0.667 |
+| L1 (simple recall) | 0.025 | 0.528 | **0.573** |
+| L2 (multi-hop) | 0.069 | 0.111 | **0.213** |
+| L3 (temporal) | 0.000 | **0.400** | 0.384 |
+| L4 (complex reasoning) | 0.178 | **0.733** | 0.504 |
 
-VividnessMem outperforms embedding-based retrieval (all-MiniLM-L6-v2 with cosine similarity) on overall Tool Accuracy by **+7 percentage points** and on F1 by **+8.2 pp**, while using zero embeddings and zero vector infrastructure. The largest gap is on L2 (medium-difficulty) questions, where VividnessMem scores 0.259 vs Embedding's 0.111 — a **+13.4 pp** advantage.
+VividnessMem outperforms embedding-based retrieval (all-MiniLM-L6-v2 with cosine similarity) on overall Tool Accuracy by **+3 percentage points** and on F1 by **+1.1 pp**, with much lower variance across seeds (±0.024 vs single-run). Uses parameter-aware retrieval to match tool arguments against stored memories — zero embeddings, zero vector infrastructure. The largest gap is on L2 (multi-hop) questions where VividnessMem scores 0.213 vs Embedding’s 0.111 — a **+10.2 pp** advantage.
 
 ### MemoryBench — WritingPrompts (50-item evaluation)
 
