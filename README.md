@@ -208,10 +208,7 @@ AI/
 
 ## Known Limitations
 
-- **No semantic understanding** — retrieval is lexical (keywords, bigrams, trigrams, co-occurrence). "Quantum entanglement" finds "quantum" but won't find "particle physics" unless co-occurrence has learned the link
-- **No concurrent access** — single-threaded file I/O. Multiple processes hitting the same memory files would race
 - **Scale ceiling untested beyond 5K** — performance is excellent at 5K memories but months of heavy use could push beyond this
-- **Contradiction detection is lexical** — catches negation patterns and emotional reversals on shared topics, but subtle semantic contradictions will be missed
 - **Consolidation quality depends on the LLM** — gist generation is only as good as the model doing the synthesis
 
 ## Latest Bug Fixes
@@ -221,6 +218,9 @@ AI/
 - **Spaced-Repetition Decay** — fixed a bug causing agent memories to never fade, which stopped the Ebbinghaus decay from working as intended with certain memories
 - **Consolidation Duplicate Append** — fixed a bug where `apply_consolidation()` appended each gist memory twice, doubling consolidated memories in the store
 - **Mood Feedback Loop** — bounded mood decay to prevent emotional spiralling; the decay rate is now tuned to prevent runaway positive/negative loops
+- **No Semantic Understanding** — `resonate()` now accepts an optional `llm_fn` parameter for LLM-powered semantic bridging. When lexical matching returns few results, the LLM generates conceptually related terms to bridge the vocabulary gap (e.g. "quantum entanglement" now finds memories about "particle physics")
+- **Lexical-Only Contradiction Detection** — `detect_contradictions()` now accepts an optional `llm_fn` parameter. Borderline lexical candidates are verified by the LLM for semantic contradiction, catching subtle conflicts that negation patterns alone would miss
+- **No Concurrent Access** — file I/O now uses cross-platform file locking (`msvcrt` on Windows, `fcntl` on Unix) with atomic writes (temp file + rename) to prevent corruption from concurrent access
 
 ## License
 

@@ -41,9 +41,32 @@ import json
 import math
 import os
 import re
+import sys
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+
+# Cross-platform file locking (stdlib only)
+if sys.platform == "win32":
+    import msvcrt
+
+    def _lock_file(f):
+        msvcrt.locking(f.fileno(), msvcrt.LK_LOCK, max(1, os.fstat(f.fileno()).st_size or 1))
+
+    def _unlock_file(f):
+        try:
+            msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, max(1, os.fstat(f.fileno()).st_size or 1))
+        except OSError:
+            pass
+else:
+    import fcntl
+
+    def _lock_file(f):
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+
+    def _unlock_file(f):
+        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
 # Optional encryption — only needed if you pass encryption_key
 try:
@@ -678,16 +701,46 @@ class VividnessMem:
         return self._fernet is not None
 
     def _write_json(self, path: Path, obj):
-        """Write a Python object as JSON — encrypted if a key is set."""
+        """Write a Python object as JSON — encrypted if a key is set.
+
+        Uses atomic write (write to temp + rename) with file locking
+        to prevent corruption from concurrent access.
+        """
         raw = json.dumps(obj, indent=2, ensure_ascii=False).encode("utf-8")
         if self._fernet:
-            path.write_bytes(self._fernet.encrypt(raw))
-        else:
-            path.write_bytes(raw)
+            raw = self._fernet.encrypt(raw)
+        # Atomic write: write to temp file then rename
+        fd, tmp = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+        try:
+            with os.fdopen(fd, "wb") as f:
+                _lock_file(f)
+                try:
+                    f.write(raw)
+                    f.flush()
+                    os.fsync(f.fileno())
+                finally:
+                    _unlock_file(f)
+            # Atomic rename (overwrites on Windows via os.replace)
+            os.replace(tmp, str(path))
+        except BaseException:
+            # Clean up temp file on failure
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
 
     def _read_json(self, path: Path):
-        """Read JSON from disk — decrypting if a key is set."""
-        raw = path.read_bytes()
+        """Read JSON from disk — decrypting if a key is set.
+
+        Uses file locking to prevent reading partial writes.
+        """
+        with open(path, "rb") as f:
+            _lock_file(f)
+            try:
+                raw = f.read()
+            finally:
+                _unlock_file(f)
         if self._fernet:
             raw = self._fernet.decrypt(raw)
         return json.loads(raw)
@@ -1171,11 +1224,21 @@ class VividnessMem:
 
     # ── Contradiction detection ───────────────────────────────────────
 
-    def detect_contradictions(self, limit: int = 5) -> list[tuple[Memory, Memory]]:
+    def detect_contradictions(self, limit: int = 5,
+                              llm_fn=None) -> list[tuple[Memory, Memory]]:
         """Find pairs of memories that may contradict each other.
 
         Looks for memories sharing topic overlap but with opposing
         emotional valence or negation patterns. Returns (older, newer) pairs.
+
+        Parameters
+        ----------
+        limit : int
+            Maximum number of contradiction pairs to return.
+        llm_fn : callable, optional
+            If provided, lexical candidates (score > 0.3) are verified by
+            the LLM for semantic contradiction, catching subtle conflicts
+            that negation patterns alone would miss.
         """
         if len(self.self_reflections) < 2:
             return []
@@ -1183,17 +1246,37 @@ class VividnessMem:
         contradictions: list[tuple[float, Memory, Memory]] = []
         n = len(self.self_reflections)
 
+        # Lower threshold when LLM is available to catch more candidates
+        threshold = 0.3 if llm_fn else 0.5
+
         for i in range(n):
             for j in range(i + 1, n):
                 a, b = self.self_reflections[i], self.self_reflections[j]
                 score = self._contradiction_score(a, b)
-                if score > 0.5:
+                if score > threshold:
                     if a.timestamp <= b.timestamp:
                         contradictions.append((score, a, b))
                     else:
                         contradictions.append((score, b, a))
 
         contradictions.sort(key=lambda x: x[0], reverse=True)
+
+        # If LLM available, verify top candidates for semantic contradiction
+        if llm_fn and contradictions:
+            verified: list[tuple[float, Memory, Memory]] = []
+            # Check up to limit*3 candidates (LLM might reject many)
+            for score, a, b in contradictions[:limit * 3]:
+                if len(verified) >= limit:
+                    break
+                if score > 0.5:
+                    # High-confidence lexical hit — keep without LLM check
+                    verified.append((score, a, b))
+                else:
+                    # Borderline — ask LLM to verify
+                    if _llm_verify_contradiction(llm_fn, a.content, b.content):
+                        verified.append((min(score + 0.2, 1.0), a, b))
+            return [(a, b) for _, a, b in verified[:limit]]
+
         return [(a, b) for _, a, b in contradictions[:limit]]
 
     @staticmethod
@@ -1616,12 +1699,24 @@ class VividnessMem:
 
     # ── Resonance (old memories resurfacing) ──────────────────────────
 
-    def resonate(self, context: str, limit: int | None = None) -> list[Memory]:
+    def resonate(self, context: str, limit: int | None = None,
+                 llm_fn=None) -> list[Memory]:
         """Find old faded memories that resonate with current conversation.
 
         Uses the inverted index for O(k) lookup plus co-occurrence graph
         expansion for learned associations.  Adaptive floor adjusts based
         on match quality.
+
+        Parameters
+        ----------
+        context : str
+            The current conversation or query text.
+        limit : int, optional
+            Maximum number of resonant memories to return.
+        llm_fn : callable, optional
+            If provided and lexical matching yields sparse results, the LLM
+            is asked to generate semantically related concepts to bridge
+            the gap (e.g. "quantum entanglement" → "particle physics").
         """
         hard_cap = max(limit or self.RESONANCE_LIMIT, self.RESONANCE_LIMIT + 3)
         if not context or not self.self_reflections:
@@ -1725,6 +1820,34 @@ class VividnessMem:
                     if (context_words & a_words) or (context_prefixes & a_prefixes):
                         resonant.append(a)
                         resonant_ids.add(id(a))
+
+        # ── LLM Semantic Bridging ─────────────────────────────────────
+        # If lexical matching found very few results and an LLM is available,
+        # ask it to generate semantically related terms and re-search.
+        if llm_fn and len(resonant) < 3 and len(self.self_reflections) > 10:
+            bridge_terms = _semantic_bridge(llm_fn, context)
+            if bridge_terms:
+                bridge_words = set()
+                for term in bridge_terms:
+                    bridge_words |= _resonance_words(term.lower())
+                bridge_words -= context_words  # only truly new terms
+                if bridge_words:
+                    bridge_indices: set[int] = set()
+                    for w in bridge_words:
+                        bridge_indices |= self._word_index.get(w, set())
+                        if len(w) >= 5:
+                            bridge_indices |= self._prefix_index.get(w[:5], set())
+                    resonant_ids = {id(r) for r in resonant} | active_set
+                    for idx in bridge_indices:
+                        if idx >= len(self.self_reflections):
+                            continue
+                        ref = self.self_reflections[idx]
+                        if id(ref) in resonant_ids:
+                            continue
+                        if len(resonant) >= hard_cap:
+                            break
+                        resonant.append(ref)
+                        resonant_ids.add(id(ref))
 
         for r in resonant:
             r.touch()
@@ -2370,6 +2493,53 @@ Give 3 alternative phrasings that mean the same thing but use different
 vocabulary. Return ONLY the 3 alternatives, one per line, no numbering.
 
 Query: {query}"""
+
+SEMANTIC_BRIDGE_PROMPT = """Given the search query below, list 5 conceptually related topics,
+terms, or phrases that someone might have stored in their memories about
+this subject — even if they used completely different words.
+
+For example:
+  Query: "quantum entanglement"
+  particle physics, superposition, wave function, Bell's theorem, quantum mechanics
+
+Return ONLY the 5 terms/phrases, comma-separated, on a single line.
+
+Query: {query}"""
+
+CONTRADICTION_VERIFY_PROMPT = """Do these two statements contradict each other?
+Consider semantic meaning, not just surface wording. Two statements contradict
+if believing both to be true at the same time would be logically inconsistent.
+
+Statement A: "{a}"
+Statement B: "{b}"
+
+Answer with ONLY "yes" or "no"."""
+
+
+def _semantic_bridge(llm_fn, query: str) -> list[str]:
+    """Ask the LLM for semantically related concepts to bridge lexical gaps."""
+    try:
+        prompt = SEMANTIC_BRIDGE_PROMPT.format(query=query)
+        response = llm_fn(prompt)
+        if response and isinstance(response, str):
+            # Parse comma-separated terms
+            terms = [t.strip() for t in response.strip().split(",") if t.strip()]
+            return terms[:8]  # cap at 8 terms
+    except Exception:
+        pass
+    return []
+
+
+def _llm_verify_contradiction(llm_fn, content_a: str, content_b: str) -> bool:
+    """Ask the LLM whether two memory contents semantically contradict."""
+    try:
+        prompt = CONTRADICTION_VERIFY_PROMPT.format(a=content_a, b=content_b)
+        response = llm_fn(prompt)
+        if response and isinstance(response, str):
+            return response.strip().lower().startswith("yes")
+    except Exception:
+        pass
+    return False
 
 
 def expand_query(llm_fn, query: str) -> str:
