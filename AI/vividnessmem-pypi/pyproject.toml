@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vividnessmem"
-version = "1.0.5"
+version = "1.0.6"
 description = "Organic episodic memory for AI agents — no RAG, no embeddings, no vector DB"
 readme = "README.md"
 license = {text = "MIT"}

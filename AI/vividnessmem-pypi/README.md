@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="VividnessLogo.png" alt="VividnessMem Logo" width="400"/>
+  <img src="https://raw.githubusercontent.com/Kronic90/VividnessMem-Ai-Roommates/main/AI/vividnessmem-pypi/VividnessLogo.png" alt="VividnessMem Logo" width="400"/>
 </p>
 
 <h1 align="center">VividnessMem</h1>
