@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Kronic90/VividnessMem-Ai-Roommates/main/AI/vividnessmem-pypi/VividnessLogo.png" alt="VividnessMem Logo" width="400"/>
+</p>
+
 # VividnessMem — Organic Episodic Memory for AI Agents
 
 A standalone, zero-dependency memory system for AI agents that gives them genuine long-term persistence — without RAG, without embeddings, without vector databases. Memories decay naturally over time, but emotionally significant or frequently recalled ones resist fading, inspired by how human episodic memory actually works.
