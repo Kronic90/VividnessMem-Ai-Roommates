@@ -16,7 +16,23 @@ Quick start::
     mem.save()
 """
 
-from .vividnessmem import Memory, ShortTermFact, VividnessMem
+from .vividnessmem import (
+    Memory,
+    ShortTermFact,
+    TaskRecord,
+    ActionRecord,
+    SolutionPattern,
+    ArtifactRecord,
+    VividnessMem,
+)
 
-__all__ = ["VividnessMem", "Memory", "ShortTermFact"]
-__version__ = "1.0.4"
+__all__ = [
+    "VividnessMem",
+    "Memory",
+    "ShortTermFact",
+    "TaskRecord",
+    "ActionRecord",
+    "SolutionPattern",
+    "ArtifactRecord",
+]
+__version__ = "1.0.5"

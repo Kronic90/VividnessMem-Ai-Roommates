@@ -1,6 +1,18 @@
-# VividnessMem
+<p align="center">
+  <img src="VividnessLogo.png" alt="VividnessMem Logo" width="400"/>
+</p>
 
-**Organic episodic memory for AI agents — no RAG, no embeddings, no vector DB.**
+<h1 align="center">VividnessMem</h1>
+
+<p align="center">
+  <strong>Organic episodic memory for AI agents — no RAG, no embeddings, no vector DB.</strong>
+</p>
+
+<p align="center">
+  <a href="https://pypi.org/project/vividnessmem/"><img src="https://img.shields.io/pypi/v/vividnessmem" alt="PyPI version"/></a>
+  <a href="https://pypi.org/project/vividnessmem/"><img src="https://img.shields.io/pypi/pyversions/vividnessmem" alt="Python versions"/></a>
+  <a href="https://github.com/Kronic90/VividnessMem-Ai-Roommates/blob/main/LICENSE"><img src="https://img.shields.io/github/license/Kronic90/VividnessMem-Ai-Roommates" alt="License"/></a>
+</p>
 
 A standalone memory system that gives LLM-based agents genuine long-term persistence. Memories decay naturally over time, but emotionally significant or frequently recalled ones resist fading — inspired by how human episodic memory actually works.
 
@@ -48,6 +60,48 @@ context = mem.get_context_block(current_entity="Alex", conversation_context="ast
 # Persist to disk
 mem.save()
 ```
+
+## What's New in v1.0.5
+
+### Professional Mode
+Toggle between **Character mode** (default — personality-rich, emotionally expressive) and **Professional mode** (neutral tone, fact-focused, no persona quirks):
+
+```python
+mem = VividnessMem("./my_agent_memory", professional=True)
+```
+
+- System context block output adapts automatically
+- No persona/emotion sections in professional mode — just facts and retrieved memories
+- Switch at any time; data is fully compatible between modes
+
+### Task-Based Memory
+Track projects, tasks, actions, and solution patterns — giving your agent structured knowledge about *what it's done* and *what worked*:
+
+```python
+# Project management
+mem.set_active_project("website-redesign", description="Frontend overhaul")
+
+# Task lifecycle
+task_id = mem.start_task("Fix navbar alignment", priority="high")
+mem.log_action(task_id, "inspect", "Checked CSS grid layout", result="found gap mismatch")
+mem.complete_task(task_id, outcome="Fixed with grid-template-columns adjustment")
+
+# Solution memory — record what worked and find it later
+mem.record_solution("css grid alignment", "Use grid-template-columns with explicit values",
+                    domain="frontend", tags=["css", "layout"])
+matches = mem.find_solutions("grid layout broken", domain="frontend")
+
+# Artifact tracking
+mem.track_artifact(project="website-redesign", path="src/navbar.css",
+                   artifact_type="source", status="modified")
+```
+
+- **4 new data classes**: `TaskRecord`, `ActionRecord`, `SolutionPattern`, `ArtifactRecord`
+- Project-scoped storage with cross-project global solutions
+- Automatic solution extraction from completed tasks
+- Access-based decay tiers (active → warm → cold → archive)
+- Full integration into `get_context_block()` output
+- Adaptive auto-tracking in professional mode
 
 ## What Makes It Different
 
@@ -97,6 +151,27 @@ Evaluated on **MemoryBench WritingPrompts** (50 items):
 
 VividnessMem provides a **+52.7% relative gain** over no-memory on narrative recall.
 
+### v1.0.5 Regression Tests (Professional Mode + Task Branch)
+
+All v1.0.5 additions verified with no performance regression (2-seed average, seeds 42 & 123):
+
+**Mem2ActBench** (n=100 per condition):
+
+| Mode | Tool Accuracy | F1 | BLEU-1 |
+|---|:---:|:---:|:---:|
+| Character | 0.350 | 0.441 | 0.594 |
+| Professional | 0.345 | 0.435 | 0.584 |
+
+**MemoryBench WritingPrompts** (n=50 per condition):
+
+| Mode | METEOR |
+|---|:---:|
+| Character | 0.159 |
+| Professional | 0.158 |
+| Previous baseline | 0.159 |
+
+Character and Professional modes produce statistically identical results — confirming zero regression from v1.0.5 code additions.
+
 ## The Vividness Formula
 
 ```
@@ -111,6 +186,7 @@ Mood alignment provides an additional boost/penalty based on emotional congruenc
 
 ## Full Feature List
 
+### Core Memory
 - **Vividness-ranked recall** with spaced-repetition decay
 - **Mood-congruent memory** (40+ emotions mapped to PAD 3D space)
 - **Associative chains** (multi-hop graph walk on shared concepts)
@@ -133,12 +209,27 @@ Mood alignment provides an additional boost/penalty based on emotional congruenc
 - **Optional AES encryption** at rest (Fernet + PBKDF2)
 - **Full JSON persistence** to disk
 
+### Professional Mode *(new in v1.0.5)*
+- **`professional=True` toggle** — neutral, fact-focused context blocks
+- **Persona suppression** — no mood quirks or character voice in output
+- **Same data layer** — switch modes without losing any memories
+
+### Task-Based Memory *(new in v1.0.5)*
+- **Project management** — `set_active_project()`, `list_projects()`, `archive_project()`
+- **Task lifecycle** — `start_task()`, `complete_task()`, `fail_task()`, `abandon_task()`
+- **Action logging** — `log_action()` with automatic solution extraction
+- **Solution memory** — `record_solution()`, `find_solutions()` with hybrid overlap scoring
+- **Artifact tracking** — `track_artifact()`, `update_artifact_status()`
+- **Access decay tiers** — active → warm → cold → archive based on usage
+- **Context block integration** — active tasks and relevant solutions injected automatically
+- **Adaptive auto-tracking** — professional mode auto-records task transitions
+
 ## API Reference
 
 ### Core
 
 ```python
-mem = VividnessMem(directory, encryption_key=None)  # Load or create
+mem = VividnessMem(directory, encryption_key=None, professional=False)
 mem.save()                                           # Persist to disk
 mem.stats()                                          # Usage statistics
 ```
@@ -161,6 +252,30 @@ mem.resonate(query, llm_fn=None)                     # Keyword/trigram + optiona
 mem.get_context_block(current_entity=None, conversation_context=None)
 mem.get_facts(entity=None)                           # Structured facts
 mem.get_entity_preferences(entity)                   # Preference map
+```
+
+### Task-Based Memory *(v1.0.5)*
+
+```python
+# Projects
+mem.set_active_project(name, description="")         # Switch active project
+mem.list_projects()                                  # All projects with status
+mem.archive_project(name)                            # Archive a project
+
+# Tasks
+task_id = mem.start_task(description, priority="medium", tags=None)
+mem.complete_task(task_id, outcome="")               # Mark done + extract solution
+mem.fail_task(task_id, reason="")                    # Mark failed
+mem.abandon_task(task_id, reason="")                 # Mark abandoned
+
+# Actions & Solutions
+mem.log_action(task_id, action_type, description, result="", artifacts=None)
+mem.record_solution(problem, solution, domain="", tags=None, confidence=1.0)
+matches = mem.find_solutions(query, domain="", min_confidence=0.0)
+
+# Artifacts
+mem.track_artifact(project, path, artifact_type="file", status="created")
+mem.update_artifact_status(project, path, status)
 ```
 
 ### Maintenance
