@@ -1,5 +1,5 @@
-VividnessMem — How To Use
-=========================
+VividnessMem — How To Use (v1.0.6)
+====================================
 
 A standalone organic memory system for any LLM agent.
 Zero dependencies beyond Python 3.10+ standard library.
@@ -8,7 +8,11 @@ Zero dependencies beyond Python 3.10+ standard library.
 
 INSTALL
 -------
-Copy VividnessMem.py into your project. That's it.
+From PyPI:
+
+    pip install vividnessmem
+
+Or copy VividnessMem.py into your project. That's it.
 
 
 QUICK START
@@ -21,6 +25,9 @@ QUICK START
 
     # Or pick your own directory:
     mem = VividnessMem(data_dir="my_agent/memories")
+
+    # Professional mode — disables emotion/mood biasing for task agents
+    mem = VividnessMem(professional=True)
 
 
 ADDING MEMORIES
@@ -87,6 +94,18 @@ agent's system prompt:
 
     Respond naturally based on what you remember."""
 
+Context-aware retrieval: pass context to get_active_self() to rank
+memories by both vividness and topical relevance:
+
+    relevant = mem.get_active_self(context="tell me about cooking")
+
+Foreground/background split — saves prompt tokens while preserving
+awareness of less-relevant memories:
+
+    fg, bg = mem.partition_active_self(context="recent conversation text")
+    # fg = full text for relevant memories
+    # bg = compressed one-liners for the rest
+
 
 RESONANCE (old memories resurfacing)
 ------------------------------------
@@ -101,13 +120,22 @@ Before building the context block, check for resonant memories:
     )
 
 Resonance finds old faded memories that match the current conversation
-topic. It uses an inverted keyword index for fast lookup.
+topic. It uses an inverted keyword index with bigram/trigram matching
+for phrase-level precision, plus co-occurrence expansion.
+
+Optional LLM semantic bridging for sparse results:
+
+    resonant = mem.resonate(
+        context="those old jazz records",
+        llm_fn=your_llm.generate,  # used only when keyword results are thin
+    )
 
 
 MOOD SYSTEM
 -----------
 The mood system shifts the agent's emotional state gradually based on
 conversation. It biases which memories surface (mood-congruent recall).
+(Disabled in professional mode — mood stays neutral.)
 
     # After each exchange, update mood with emotions from the conversation
     mem.update_mood_from_conversation(["happy", "curious"])
@@ -115,6 +143,175 @@ conversation. It biases which memories surface (mood-congruent recall).
     # Check current mood
     print(mem.mood_label)   # e.g. "happy"
     print(mem.mood)         # PAD vector, e.g. (0.6, 0.3, 0.2)
+
+
+SHORT-TERM MEMORY (STM)
+------------------------
+Volatile facts that auto-expire after about 12 hours. Good for
+tracking transient details (current task, what someone just said,
+today's weather) that shouldn't become permanent memories.
+
+    # Store a fact
+    mem.add_fact(entity="Alice", attribute="favorite_drink", value="oat latte")
+    mem.add_fact(entity="Alice", attribute="current_topic", value="weekend plans")
+
+    # Retrieve facts for an entity
+    facts = mem.get_facts(entity="Alice")
+    for f in facts:
+        print(f"{f.attribute}: {f.value}")
+
+    # Or get a formatted context string
+    stm_ctx = mem.get_stm_context(entity="Alice")
+
+    # Context-based retrieval (keyword matching)
+    relevant_facts = mem.get_facts(context="coffee preferences")
+
+STM auto-deduplicates: updating the same entity+attribute replaces
+the old fact rather than stacking duplicates.
+
+
+ENTITY PREFERENCES
+------------------
+Track structured likes, dislikes, and sentiments about topics for
+each entity. More structured than free-text social impressions.
+
+    mem.update_entity_preference("Alice", "music", "jazz", "likes")
+    mem.update_entity_preference("Alice", "music", "heavy metal", "dislikes")
+    mem.update_entity_preference("Alice", "food", "sushi", "loves")
+
+    # Get all preferences
+    prefs = mem.get_entity_preferences("Alice")
+    # {"music": {"jazz": "likes", "heavy metal": "dislikes"}, "food": {"sushi": "loves"}}
+
+    # Get formatted context string (used in get_context_block() automatically)
+    pref_ctx = mem.get_preference_context("Alice")
+
+
+PROFESSIONAL MODE
+-----------------
+For task-oriented agents (coding assistants, project managers, etc.)
+that don't need emotional coloring. Professional mode:
+
+  - Freezes mood at neutral — no emotional drift
+  - Disables mood-congruent recall bias
+  - Uses neutral context block headers ("=== MEMORY ===" instead of
+    "=== WHAT I REMEMBER ===")
+  - Preserves ALL core mechanics: decay, spaced repetition, resonance,
+    deduplication, task memory, solutions, artifacts
+
+    mem = VividnessMem(professional=True)
+
+    # Everything works the same, minus emotion effects
+    mem.add_self_reflection("The API uses pagination with cursor tokens",
+                           emotion="neutral", importance=7)
+    mem.update_mood_from_conversation(["frustrated"])  # no-op
+    print(mem.mood_label)  # always "neutral"
+
+
+TASK MEMORY (Project / Task / Solution / Artifact tracking)
+-----------------------------------------------------------
+Full project-aware task memory for agents that build things. Tracks
+projects, tasks, actions, auto-extracted solutions, and artifacts.
+
+### Projects
+
+    mem.set_active_project("my-web-app")
+    projects = mem.list_projects()   # [{"name": "my-web-app", "status": "active", ...}]
+    mem.archive_project("old-project")
+
+### Tasks
+
+    # Start a task (returns a unique task_id)
+    tid = mem.start_task("Implement user authentication",
+                         project="my-web-app", priority=8,
+                         tags=["backend", "security"])
+
+    # Subtasks via parent_id
+    sub_tid = mem.start_task("Write JWT token validator",
+                             project="my-web-app", parent_id=tid)
+
+    # Complete or fail
+    mem.complete_task(tid, outcome="Auth system working with JWT + refresh tokens")
+    mem.fail_task(sub_tid, reason="Token library has a breaking bug")
+    # Also: mem.abandon_task(tid, reason="Requirements changed")
+
+    # Query tasks
+    active = mem.get_active_tasks()                 # current project
+    active = mem.get_active_tasks("my-web-app")     # specific project
+    task = mem.get_task(tid)                         # by ID
+
+### Action Logging
+
+    # Log what the agent did while working on a task
+    mem.log_action(tid, action="Added bcrypt password hashing",
+                   result="success", importance=6)
+
+    mem.log_action(tid, action="Tried MD5 for passwords",
+                   result="failure", error="MD5 is insecure",
+                   fix="Switched to bcrypt", importance=7)
+
+    actions = mem.get_task_actions(tid)
+
+When the system detects a failure followed by a success on the same
+task, it automatically extracts a SolutionPattern — "I tried X, it
+failed, then I did Y and it worked."
+
+### Solution Patterns
+
+    # Record a solution explicitly
+    mem.record_solution(
+        problem="CORS errors when calling API from frontend",
+        failed_approaches=["Adding headers manually", "Using a proxy"],
+        solution="Configure CORS middleware on the server with allowed origins",
+        tags=["backend", "cors"],
+        importance=8,
+    )
+
+    # Find matching solutions later
+    matches = mem.find_solutions("getting CORS errors on fetch requests")
+    for sol in matches:
+        print(f"Solution: {sol.solution}")
+        print(f"Failed approaches: {sol.failed_approaches}")
+        print(f"Applied {sol.times_applied} times")
+
+    # Solutions gain importance each time they're applied (capped at +3)
+
+### Artifact Tracking
+
+    # Track key project elements — files, APIs, characters, concepts
+    mem.track_artifact("auth_middleware.py", artifact_type="file",
+                       description="JWT authentication middleware",
+                       project="my-web-app", importance=8,
+                       dependencies=["jwt_utils.py"])
+
+    mem.update_artifact("auth_middleware.py",
+                        state="refactored to use refresh tokens")
+
+    # Get a compact overview of all project artifacts
+    overview = mem.get_project_overview("my-web-app")
+
+    # Find related artifacts (dependency graph)
+    related = mem.get_related("auth_middleware.py")
+
+### Task Context Injection
+
+    # Build the task memory section for your system prompt
+    task_ctx = mem.get_task_context(conversation_context="working on auth")
+    # Includes: active project, tasks, recent solutions, artifacts
+
+    # Or let get_context_block() include it automatically:
+    full_ctx = mem.get_context_block(
+        current_entity="User",
+        conversation_context="working on auth",
+    )
+
+### Task Memory Decay
+
+Task memory uses tiered decay based on project age:
+  - Active (0–7 days): Normal decay — everything fresh
+  - Cooling (8–30 days): 2.5× faster decay — details fade
+  - Cold (31–90 days): 6× faster decay — only key solutions persist
+  - Archived: No tasks shown, but solutions remain searchable
 
 
 SESSION MANAGEMENT & MAINTENANCE
@@ -147,6 +344,10 @@ MEMORY CONSOLIDATION
 --------------------
 Periodically (e.g. every 10 sessions), consolidate related memories:
 
+    # Find clusters of related memories
+    clusters = mem.find_consolidation_clusters()
+
+    # Or use the combined prompt builder
     prompt = mem.prepare_consolidation_prompt()
     if prompt:
         response = your_llm.generate(prompt)
@@ -163,6 +364,22 @@ You can also check manually:
     pairs = mem.detect_contradictions()
     for older, newer in pairs:
         print(f"Conflict: '{older.content}' vs '{newer.content}'")
+
+    # With LLM verification for catching subtle conflicts:
+    pairs = mem.detect_contradictions(llm_fn=your_llm.generate)
+
+    # Get formatted contradiction context
+    ctx = mem.get_contradiction_context()
+
+
+ASSOCIATION CHAINS
+------------------
+Walk the association graph from seed memories to find conceptually
+connected memories that didn't directly match a query:
+
+    active = mem.get_active_self()
+    seed_indices = [0, 2]  # indices into self_reflections
+    associated = mem.associate(seed_indices, hops=2)
 
 
 STATS
@@ -185,6 +402,7 @@ VividnessMem persists everything as plain JSON:
     memory_data/
       self_memory.json      # all self-reflections
       brief.json            # compressed briefs, session counter, mood
+      task_memory.json      # projects, tasks, actions, solutions, artifacts
       social/
         alice.json           # impressions of Alice
         bob.json             # impressions of Bob
@@ -234,6 +452,7 @@ Encrypted file structure:
       .salt                  # 16-byte random salt (keep this safe!)
       self_memory.enc        # encrypted self-reflections
       brief.enc              # encrypted briefs, session counter, mood
+      task_memory.enc        # encrypted task memory
       social/
         a3f1b2c9e7d04f1a.enc # encrypted impressions (hashed name)
         7bc0de913fa48e22.enc # another entity
@@ -363,10 +582,11 @@ KEY CONCEPTS
 - Mood:         PAD vector (Pleasure, Arousal, Dominance).
                 Shifts gradually with conversation emotions.
                 Biases which memories surface (mood-congruent recall).
+                Disabled in professional mode.
 
 - Resonance:    Old faded memories resurfacing when the current
                 conversation matches their keywords. Uses an inverted
-                index for fast O(k) lookup.
+                index with bigram/trigram matching for O(k) lookup.
 
 - Associations: Memories linked by shared concepts. When one resonates,
                 connected memories can chain-activate.
@@ -381,6 +601,12 @@ KEY CONCEPTS
 - Deduplication: New memories with >80% word overlap merge with existing
                  ones (keeping higher importance, preserving history).
 
+- STM:          Short-term volatile facts (12-hour decay) for transient
+                details. Auto-deduplicates by entity+attribute.
+
+- Preferences:  Structured entity likes/dislikes tracked separately
+                from free-text social impressions.
+
 - Briefs:       Periodic LLM-generated compressed self-summaries that
                 capture patterns across many memories.
 
@@ -392,6 +618,7 @@ KEY CONCEPTS
 
 - Contradictions: Automatic detection of memories that may conflict
                   (same topic, opposing emotion or negation patterns).
+                  Optional LLM verification for subtle conflicts.
 
 - Dreaming:     Between-session discovery of hidden connections via
                 2-hop association graph traversal. Finds memories that
@@ -405,6 +632,14 @@ KEY CONCEPTS
   Arcs:         (trajectory) plus accumulated warmth. Automatically
                 labels warming/cooling/stable trends.
 
+- Task Memory:  Project-aware task/action/solution/artifact tracking
+                with tiered decay (active → cooling → cold → archived).
+                Solutions auto-extracted from fail→success sequences.
+
+- Professional  Emotion-free mode for task-oriented agents. All core
+  Mode:         mechanics preserved (decay, resonance, dedup, tasks),
+                only mood and emotional biasing disabled.
+
 
 TUNING
 ------
@@ -416,9 +651,70 @@ Override class constants to adjust behavior:
     mem.RESONANCE_SCORE_FLOOR = 2.0  # lower = more lenient resonance
 
 
+FULL API REFERENCE (quick list)
+-------------------------------
+Core:           VividnessMem(data_dir, encryption_key, professional)
+                .save()  .stats()  .bump_session()
+
+Self Memory:    .add_self_reflection(content, emotion, importance, source, why_saved)
+                .get_active_self(context)  .partition_active_self(context)
+
+Social:         .add_social_impression(entity, content, emotion, importance, why_saved)
+                .get_active_social(entity)
+
+Mood:           .mood  .mood_label  .update_mood_from_conversation(emotions)
+
+STM:            .add_fact(entity, attribute, value, retrieval_tags)
+                .get_facts(entity, context)  .get_stm_context(entity, context)
+
+Preferences:    .update_entity_preference(entity, category, item, sentiment)
+                .get_entity_preferences(entity)  .get_preference_context(entity)
+
+Resonance:      .resonate(context, limit, llm_fn)
+Association:    .associate(seed_indices, hops)
+
+Tasks:          .set_active_project(name)  .list_projects()  .archive_project(name)
+                .start_task(desc, project, priority, parent_id, tags)
+                .complete_task(id, outcome)  .fail_task(id, reason)
+                .abandon_task(id, reason)
+                .get_active_tasks(project)  .get_task(id)
+
+Actions:        .log_action(task_id, action, result, error, fix, importance)
+                .get_task_actions(task_id)
+
+Solutions:      .record_solution(problem, failed, solution, tags, importance)
+                .find_solutions(description, top_k)
+
+Artifacts:      .track_artifact(name, type, desc, project, importance, deps)
+                .update_artifact(name, state, desc)
+                .get_project_overview(project)  .get_related(name)
+
+Context:        .get_context_block(entity, resonant, conversation_context)
+                .get_task_context(conversation_context)
+                .get_contradiction_context()  .get_regret_context()
+                .get_arc_context(entity)  .get_preference_context(entity)
+                .get_stm_context(entity, context)
+
+Maintenance:    .needs_brief()  .prepare_brief_prompt(entity)
+                .apply_brief(parsed, entity)
+                .needs_rescore()  .prepare_rescore_prompt()
+                .apply_rescores(adjustments, indexed)
+                .detect_contradictions(limit, llm_fn)
+                .find_consolidation_clusters()
+                .prepare_consolidation_prompt()  .apply_consolidation(gists)
+                .needs_dream()  .prepare_dream_prompt()  .apply_dream(connections)
+                .get_regret_memories()  .get_regret_patterns()
+                .get_relationship_arc(entity)
+
+Parsing:        parse_curation_response(text)  parse_brief_response(text)
+                parse_rescore_response(text)  parse_dream_response(text)
+                expand_query(llm_fn, query)
+
+
 LICENSE
 -------
 MIT — use it however you want.
 
 Author: Kronic90
 GitHub: https://github.com/Kronic90/VividnessMem-Ai-Roommates
+PyPI:   https://pypi.org/project/vividnessmem/
