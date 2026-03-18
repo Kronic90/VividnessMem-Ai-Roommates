@@ -1,0 +1,12 @@
+{
+    "display_name": "VividnessMem",
+    "loading_order": 100,
+    "requires": [],
+    "optional": [],
+    "js": "index.js",
+    "css": "style.css",
+    "author": "Kronic90",
+    "version": "1.0.0",
+    "homePage": "https://github.com/Kronic90/VividnessMem-Ai-Roommates",
+    "auto_update": false
+}

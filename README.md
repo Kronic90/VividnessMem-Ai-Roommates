@@ -199,6 +199,15 @@ AI/
   standalone memory/
     VividnessMem.py      The standalone memory system — drop this into your own project
     howtouse.txt         Quick usage reference
+  VividMem-Embed/
+    server/
+      vividnessmem_server.py   FastAPI REST server for SillyTavern integration
+      requirements.txt         Python dependencies (fastapi, uvicorn, pydantic)
+    st-extension/
+      manifest.json            SillyTavern extension manifest
+      index.js                 Client-side extension (auto-store, emotion detection, mood badge)
+      style.css                Extension styles (emotion-coloured memory cards, mood badge)
+    README.md                  Full SillyTavern extension documentation
   ai_roommates.py        Main app: GUI, conversation engine, model loading
   memory_aria.py         Aria's memory (VividnessMem-based)
   memory_rex.py          Rex's memory (MemGPT-style)
@@ -209,6 +218,54 @@ AI/
   benchmarks/            Internal benchmark suite (RAG/MemGPT comparison)
   benchmark_results/     Mem2ActBench and MemoryBench result files
 ```
+
+## How to Use in SillyTavern
+
+VividnessMem integrates with [SillyTavern](https://github.com/SillyTavern/SillyTavern) as a third-party extension, giving your characters organic long-term memory with emotion-aware recall, natural forgetting, and mood-driven personality.
+
+### 1. Start the Memory Server
+
+```bash
+cd AI/VividMem-Embed/server
+pip install -r requirements.txt
+python vividnessmem_server.py --port 5050
+```
+
+The server creates a `vividmem_data/` directory for per-character memory storage. Each character gets isolated memory — switching characters in SillyTavern automatically switches memory contexts.
+
+### 2. Install the SillyTavern Extension
+
+Copy the extension into SillyTavern's third-party extensions folder:
+
+```powershell
+# Windows — adjust the SillyTavern path to your install location
+Copy-Item -Recurse AI\VividMem-Embed\st-extension\* "C:\path\to\SillyTavern\public\scripts\extensions\third-party\VividnessMem\"
+```
+
+```bash
+# Linux / macOS
+cp -r AI/VividMem-Embed/st-extension/ /path/to/SillyTavern/public/scripts/extensions/third-party/VividnessMem/
+```
+
+### 3. Enable and Configure
+
+1. Open SillyTavern in your browser
+2. Open the **Extensions** panel (puzzle piece icon)
+3. Find **VividnessMem** and toggle it on
+4. Set the **Server URL** to `http://127.0.0.1:5050` (default)
+5. Click **Test Connection** — a green dot confirms it's working
+
+### What Happens Next
+
+Once enabled, the extension works automatically:
+
+- **Every message** you send is stored as a social impression with auto-detected emotion and importance
+- **Every character reply** is stored as a self-reflection in that character's memory
+- **Before each generation**, the most relevant memories are injected into the system prompt — decayed by time, biased by the character's current mood
+- **A mood badge** appears next to the character name showing their current emotional state
+- **Relationship arcs** build over time — warmth, trajectory, interaction history
+
+The extension settings panel lets you toggle auto-storage, emotion detection, context injection, and browse stored memories. See [`AI/VividMem-Embed/README.md`](AI/VividMem-Embed/README.md) for the full API reference, troubleshooting, and advanced configuration.
 
 ## Known Limitations
 

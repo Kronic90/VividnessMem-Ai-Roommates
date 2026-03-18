@@ -1,0 +1,231 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   VividnessMem — SillyTavern Extension Styles
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Settings panel ─────────────────────────────────────────────────────── */
+
+#vividnessmem_settings .vividmem-section {
+    margin: 10px 0;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--SmartThemeBorderColor, #444);
+}
+
+#vividnessmem_settings .vividmem-section:last-child {
+    border-bottom: none;
+}
+
+#vividnessmem_settings h4 {
+    margin: 0 0 8px 0;
+    font-size: 13px;
+    color: var(--SmartThemeQuoteColor, #aaa);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+#vividnessmem_settings label {
+    display: block;
+    margin: 4px 0;
+    font-size: 13px;
+}
+
+#vividnessmem_settings .checkbox_label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    padding: 2px 0;
+}
+
+/* ── Connection status ──────────────────────────────────────────────────── */
+
+.vividmem-status {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 0;
+    font-size: 12px;
+}
+
+.vividmem-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+    background: #666;
+}
+
+.vividmem-dot.connected {
+    background: #4caf50;
+    box-shadow: 0 0 4px #4caf50;
+}
+
+.vividmem-dot.error {
+    background: #f44336;
+    box-shadow: 0 0 4px #f44336;
+}
+
+.vividmem-dot.checking {
+    background: #ff9800;
+    animation: vividmem-pulse 1s ease-in-out infinite;
+}
+
+@keyframes vividmem-pulse {
+    0%, 100% { opacity: 1; }
+    50%      { opacity: 0.3; }
+}
+
+/* ── Stats display ──────────────────────────────────────────────────────── */
+
+.vividmem-stats {
+    margin-top: 8px;
+    padding: 8px;
+    background: var(--SmartThemeBlurTintColor, rgba(0,0,0,0.2));
+    border-radius: 6px;
+    font-size: 12px;
+}
+
+.vividmem-stats-table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.vividmem-stats-table td {
+    padding: 3px 6px;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+}
+
+.vividmem-stats-table td:first-child {
+    color: var(--SmartThemeQuoteColor, #aaa);
+}
+
+.vividmem-stats-table td:last-child {
+    text-align: right;
+}
+
+/* ── Memory browser ─────────────────────────────────────────────────────── */
+
+.vividmem-browser {
+    margin-top: 8px;
+    max-height: 400px;
+    overflow-y: auto;
+    padding: 4px;
+}
+
+.vividmem-memory-card {
+    background: var(--SmartThemeBlurTintColor, rgba(0,0,0,0.15));
+    border-left: 3px solid var(--SmartThemeBorderColor, #555);
+    border-radius: 4px;
+    padding: 8px 10px;
+    margin: 6px 0;
+    font-size: 12px;
+    transition: border-color 0.2s;
+}
+
+.vividmem-memory-card:hover {
+    border-left-color: var(--SmartThemeQuoteColor, #aaa);
+}
+
+/* Emotion-colored borders */
+.vividmem-memory-card.emotion-happy,
+.vividmem-memory-card.emotion-joyful,
+.vividmem-memory-card.emotion-excited {
+    border-left-color: #ffeb3b;
+}
+
+.vividmem-memory-card.emotion-sad,
+.vividmem-memory-card.emotion-lonely,
+.vividmem-memory-card.emotion-melancholy {
+    border-left-color: #5c6bc0;
+}
+
+.vividmem-memory-card.emotion-angry,
+.vividmem-memory-card.emotion-frustrated {
+    border-left-color: #f44336;
+}
+
+.vividmem-memory-card.emotion-afraid,
+.vividmem-memory-card.emotion-anxious {
+    border-left-color: #9c27b0;
+}
+
+.vividmem-memory-card.emotion-affectionate,
+.vividmem-memory-card.emotion-warm {
+    border-left-color: #e91e63;
+}
+
+.vividmem-memory-card.emotion-curious,
+.vividmem-memory-card.emotion-thoughtful {
+    border-left-color: #00bcd4;
+}
+
+.vividmem-memory-card.emotion-grateful,
+.vividmem-memory-card.emotion-hopeful {
+    border-left-color: #8bc34a;
+}
+
+.vividmem-memory-card.emotion-nostalgic {
+    border-left-color: #795548;
+}
+
+.vividmem-memory-header {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 4px;
+    font-size: 11px;
+    color: var(--SmartThemeQuoteColor, #888);
+}
+
+.vividmem-emotion {
+    text-transform: capitalize;
+    font-weight: 600;
+}
+
+.vividmem-importance {
+    color: #ff9800;
+}
+
+.vividmem-vividness {
+    color: #4caf50;
+}
+
+.vividmem-source {
+    margin-left: auto;
+    opacity: 0.6;
+    font-style: italic;
+}
+
+.vividmem-memory-content {
+    line-height: 1.4;
+    color: var(--SmartThemeBodyColor, #ddd);
+    word-wrap: break-word;
+}
+
+/* ── Mood badge (in chat area) ──────────────────────────────────────────── */
+
+.vividmem-mood-badge {
+    display: inline-block;
+    padding: 2px 10px;
+    margin-left: 8px;
+    background: var(--SmartThemeBlurTintColor, rgba(0,0,0,0.3));
+    border: 1px solid var(--SmartThemeBorderColor, #555);
+    border-radius: 12px;
+    font-size: 11px;
+    color: var(--SmartThemeQuoteColor, #aaa);
+    vertical-align: middle;
+    cursor: default;
+}
+
+/* ── Action buttons ─────────────────────────────────────────────────────── */
+
+#vividnessmem_settings .menu_button {
+    margin: 4px 0;
+    width: 100%;
+}
+
+/* ── Error text ─────────────────────────────────────────────────────────── */
+
+.vividmem-stats .error,
+.vividmem-browser .error {
+    color: #f44336;
+    font-style: italic;
+}
