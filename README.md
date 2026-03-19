@@ -1,8 +1,26 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/Kronic90/VividnessMem-Ai-Roommates/main/AI/vividnessmem-pypi/VividnessLogo.png" alt="VividnessMem Logo" width="400"/>
+</p>
+
 # VividnessMem — Organic Episodic Memory for AI Agents
 
 A standalone, zero-dependency memory system for AI agents that gives them genuine long-term persistence — without RAG, without embeddings, without vector databases. Memories decay naturally over time, but emotionally significant or frequently recalled ones resist fading, inspired by how human episodic memory actually works.
 
 **Single file. No external services. Drop it into any project.**
+
+## Install
+
+```bash
+pip install vividnessmem
+```
+
+For optional AES encryption at rest:
+
+```bash
+pip install vividnessmem[encryption]
+```
+
+Or grab the single file directly from [`AI/standalone memory/VividnessMem.py`](AI/standalone%20memory/VividnessMem.py) — no dependencies required.
 
 ## Why VividnessMem?
 
@@ -65,28 +83,28 @@ When memories are stored with emotion tags (happy, anxious, grateful, etc.), the
 
 VividnessMem has been evaluated on two established benchmarks using a local Gemma 3 12B model (Q4_K_M quantisation, no API calls).
 
-### Mem2ActBench (100-item evaluation)
+### Mem2ActBench (5-seed averaged evaluation)
 
-Mem2ActBench tests whether a memory system can store conversational sessions and later retrieve the right information to select correct tools/actions. 14,094 sessions indexed, 100 question-answer pairs evaluated across difficulty levels L1–L4.
+Mem2ActBench tests whether a memory system can store conversational sessions and later retrieve the right information to select correct tools/actions. 14,094 sessions indexed, 100 question-answer pairs evaluated per seed across difficulty levels L1–L4. Results averaged over 5 random seeds (42, 123, 7, 99, 256).
 
-| Metric | No Memory | VividnessMem |
-|---|:---:|:---:|
-| **Tool Accuracy** | 0.100 | **0.450** |
-| **F1** | 0.158 | **0.527** |
-| **Precision** | 0.174 | **0.554** |
-| **Recall** | 0.151 | **0.529** |
-| **BLEU-1** | 0.302 | **0.627** |
+| Metric | No Memory | Embedding (MiniLM-L6-v2) | VividnessMem |
+|---|:---:|:---:|:---:|
+| **Tool Accuracy** | 0.053 | 0.440 | **0.470 ± 0.024** |
+| **F1** | 0.118 | 0.512 | **0.523 ± 0.011** |
+| **Precision** | 0.130 | 0.559 | **0.527 ± 0.010** |
+| **Recall** | 0.113 | 0.519 | **0.561 ± 0.020** |
+| **BLEU-1** | 0.273 | 0.641 | **0.614 ± 0.008** |
 
-**Per difficulty level:**
+**Per difficulty level (5-seed average):**
 
-| Level | No Memory TA | VividnessMem TA | No Memory F1 | VividnessMem F1 |
-|---|:---:|:---:|:---:|:---:|
-| L1 (n=53) | 0.075 | **0.547** | 0.098 | **0.571** |
-| L2 (n=27) | 0.074 | **0.185** | 0.199 | **0.327** |
-| L3 (n=5) | 0.000 | **0.400** | 0.133 | **0.633** |
-| L4 (n=15) | 0.267 | **0.600** | 0.305 | **0.694** |
+| Level | No Memory TA | Embedding TA | VividnessMem TA |
+|---|:---:|:---:|:---:|
+| L1 (simple recall) | 0.025 | 0.528 | **0.573** |
+| L2 (multi-hop) | 0.069 | 0.111 | **0.213** |
+| L3 (temporal) | 0.000 | **0.400** | 0.384 |
+| L4 (complex reasoning) | 0.178 | **0.733** | 0.504 |
 
-VividnessMem shows the strongest gains on harder questions (L3/L4), where multi-hop retrieval and contextual understanding matter most.
+VividnessMem outperforms embedding-based retrieval (all-MiniLM-L6-v2 with cosine similarity) on overall Tool Accuracy by **+3 percentage points** and on F1 by **+1.1 pp**, with much lower variance across seeds (±0.024 vs single-run). Uses parameter-aware retrieval to match tool arguments against stored memories — zero embeddings, zero vector infrastructure. The largest gap is on L2 (multi-hop) questions where VividnessMem scores 0.213 vs Embedding’s 0.111 — a **+10.2 pp** advantage.
 
 ### MemoryBench — WritingPrompts (50-item evaluation)
 
@@ -94,11 +112,10 @@ MemoryBench tests narrative memory: given a set of writing-prompt conversations 
 
 | Condition | METEOR |
 |---|:---:|
-| No Memory | 0.125 |
-| VividnessMem | **0.159** |
-| Embedding (all-MiniLM-L6-v2) | 0.159 |
+| No Memory | 0.092 |
+| VividnessMem | **0.141** |
 
-VividnessMem matches embedding-based retrieval on narrative recall — without using any embeddings at all.
+VividnessMem provides a **+52.7% relative gain** over no-memory on narrative recall.
 
 ## How It Works
 
@@ -166,7 +183,7 @@ VividnessMem ships with a full SillyTavern extension for use with any LLM backen
 - **Per-chat or cross-chat** memory scoping
 - **Token budget control** — set max context tokens for memory injection
 
-See the [ST Extension README](VividMem-Embed/README.md) for setup instructions and API reference.
+See the [ST Extension README](AI/VividMem-Embed/README.md) for setup instructions and API reference.
 
 ## Improved Performance with VividEmbed
 
@@ -180,7 +197,7 @@ VividEmbed adds a hybrid vector layer on top of VividnessMem's associative retri
 
 ## Verified: 664 Tests, 0 Failures
 
-The memory system has been rigorously tested across multiple suites:
+The memory system has been rigorously tested across six suites:
 
 | Suite | Tests | What it covers |
 |---|:---:|---|
@@ -191,12 +208,14 @@ The memory system has been rigorously tested across multiple suites:
 | **Professional Mode** | 190 | Professional context management, task-based memory, cross-session task recall |
 | **NeuroChemistry** | 241 | Chemical cascades, event profiles, cognitive modifiers, emotion mapping, decay dynamics, integration with memory encoding/retrieval |
 
-All test code and results are in the [`tests/`](tests/) directory.
+All test code and results are in the [`AI/tests/`](AI/tests/) directory.
 
 ## Quick Start
 
+### Via pip (recommended)
+
 ```python
-from VividnessMem import VividnessMem
+from vividnessmem import VividnessMem
 
 mem = VividnessMem("./my_agent_memory")
 
@@ -211,49 +230,136 @@ mem.add_social_impression("Alex", "Alex explains things clearly and patiently", 
 mem.add_fact("Alex", "favorite_color", "blue")
 mem.add_fact("Alex", "favorite_color", "green")  # Updates, doesn't duplicate
 
-# Retrieve what matters right now
-context = mem.get_active_context(current_mood="curious")
+# Track preferences
+mem.update_entity_preference("Alex", "music", "jazz", "likes")
 
-# Search by resonance (associative keyword matching)
-results = mem.get_resonant_memories("that time we talked about stars")
+# Retrieve by resonance (keyword/trigram/co-occurrence matching)
+matches = mem.resonate("tell me about that astronomy discussion")
 
-# Enable neurochemistry
+# Get the context block to inject into your LLM prompt
+context = mem.get_context_block(current_entity="Alex", conversation_context="astronomy")
+
+# Persist to disk
+mem.save()
+
+# Enable neurochemistry (v1.0.7)
 mem.chemistry.enabled = True
 mem.chemistry.on_event("learning_breakthrough")   # Dopamine + serotonin surge
 state = mem.chemistry.get_state()                  # Check chemical levels
 ```
 
-## Install
+### Via single file
 
-**PyPI (library only):**
+Copy [`VividnessMem.py`](AI/standalone%20memory/VividnessMem.py) into your project and import directly:
+
+```python
+from VividnessMem import VividnessMem
+```
+
+No dependencies beyond Python's standard library.
+
+## AI Roommates — The Test Environment
+
+To stress-test VividnessMem in practice, two AI agents with different memory architectures share a living space:
+
+- **Aria** — uses VividnessMem (organic, vividness-ranked, no RAG)
+- **Rex** — uses a MemGPT-style structured memory (core/archival split)
+
+Both agents talk autonomously, curate their own memories, and maintain persistent identities across sessions. The full application includes a PyQt5 GUI, sandboxed code execution, web browsing, vision capabilities, and a shared message board.
+
+## Repository Structure
+
+```
+README.md               This file
+LICENSE                  MIT license
+AI/
+  standalone memory/
+    VividnessMem.py      The standalone memory system — drop this into your own project
+    howtouse.txt         Quick usage reference
+  VividMem-Embed/
+    server/
+      vividnessmem_server.py   FastAPI REST server for SillyTavern integration
+      requirements.txt         Python dependencies (fastapi, uvicorn, pydantic)
+    st-extension/
+      manifest.json            SillyTavern extension manifest
+      index.js                 Client-side extension (auto-store, emotion detection, mood badge)
+      style.css                Extension styles (emotion-coloured memory cards, mood badge)
+    README.md                  Full SillyTavern extension documentation
+  ai_roommates.py        Main app: GUI, conversation engine, model loading
+  memory_aria.py         Aria's memory (VividnessMem-based)
+  memory_rex.py          Rex's memory (MemGPT-style)
+  task_memory.py         Long-term task/technique memory
+  web_tools.py           Web search, page reading, image fetching
+  message_board.py       Threaded message board
+  tests/                 Full test suites with results
+  benchmarks/            Internal benchmark suite (RAG/MemGPT comparison)
+  benchmark_results/     Mem2ActBench and MemoryBench result files
+```
+
+## How to Use in SillyTavern
+
+VividnessMem integrates with [SillyTavern](https://github.com/SillyTavern/SillyTavern) as a third-party extension, giving your characters organic long-term memory with emotion-aware recall, natural forgetting, and mood-driven personality.
+
+### 1. Start the Memory Server
+
 ```bash
-pip install vividnessmem
+cd AI/VividMem-Embed/server
+pip install -r requirements.txt
+python vividnessmem_server.py --port 5050
 ```
 
-**From source (full repo with tests, benchmarks, and ST extension):**
+The server creates a `vividmem_data/` directory for per-character memory storage. Each character gets isolated memory — switching characters in SillyTavern automatically switches memory contexts.
+
+### 2. Install the SillyTavern Extension
+
+Copy the extension into SillyTavern's third-party extensions folder:
+
+```powershell
+# Windows — adjust the SillyTavern path to your install location
+Copy-Item -Recurse AI\VividMem-Embed\st-extension\* "C:\path\to\SillyTavern\public\scripts\extensions\third-party\VividnessMem\"
+```
+
 ```bash
-git clone https://github.com/Kronic90/VividnessMem-Ai-Roommates.git
+# Linux / macOS
+cp -r AI/VividMem-Embed/st-extension/ /path/to/SillyTavern/public/scripts/extensions/third-party/VividnessMem/
 ```
 
-**SillyTavern extension:** See [VividMem-Embed/README.md](VividMem-Embed/README.md) for setup.
+### 3. Enable and Configure
 
-## Project Structure
+1. Open SillyTavern in your browser
+2. Open the **Extensions** panel (puzzle piece icon)
+3. Find **VividnessMem** and toggle it on
+4. Set the **Server URL** to `http://127.0.0.1:5050` (default)
+5. Click **Test Connection** — a green dot confirms it's working
 
-```
-├── standalone memory/VividnessMem.py   # The memory system (~4,000 lines)
-├── VividMem-Embed/                     # SillyTavern integration
-│   ├── server/                         # FastAPI REST server
-│   ├── st-extension/                   # SillyTavern extension (JS/CSS)
-│   └── README.md                       # ST extension docs
-├── vividnessmem-pypi/                  # PyPI package source
-├── tests/                              # 664 tests across 6 suites
-└── benchmarks/                         # Mem2ActBench, MemoryBench scripts
-```
+### What Happens Next
+
+Once enabled, the extension works automatically:
+
+- **Every message** you send is stored as a social impression with auto-detected emotion and importance
+- **Every character reply** is stored as a self-reflection in that character's memory
+- **Before each generation**, the most relevant memories are injected into the system prompt — decayed by time, biased by the character's current mood
+- **A mood badge** appears next to the character name showing their current emotional state
+- **Relationship arcs** build over time — warmth, trajectory, interaction history
+
+The extension settings panel lets you toggle auto-storage, emotion detection, context injection, and browse stored memories. See [`AI/VividMem-Embed/README.md`](AI/VividMem-Embed/README.md) for the full API reference, troubleshooting, and advanced configuration.
+
+## Known Limitations
+
+- **Scale ceiling untested beyond 5K** — performance is excellent at 5K memories but months of heavy use could push beyond this
+- **Consolidation quality depends on the LLM** — gist generation is only as good as the model doing the synthesis
+
+## Latest Bug Fixes
+
+- **Negative Memory Fixation** — fixed a bug that caused agents to fixate on negative memories, resulting in constant angry/sad agents
+- **Context Overcrowding** — fixed a bug that caused agents to lose focus on current tasks due to irrelevant memories taking priority
+- **Spaced-Repetition Decay** — fixed a bug causing agent memories to never fade, which stopped the Ebbinghaus decay from working as intended with certain memories
+- **Consolidation Duplicate Append** — fixed a bug where `apply_consolidation()` appended each gist memory twice, doubling consolidated memories in the store
+- **Mood Feedback Loop** — bounded mood decay to prevent emotional spiralling; the decay rate is now tuned to prevent runaway positive/negative loops
+- **No Semantic Understanding** — `resonate()` now accepts an optional `llm_fn` parameter for LLM-powered semantic bridging. When lexical matching returns few results, the LLM generates conceptually related terms to bridge the vocabulary gap (e.g. "quantum entanglement" now finds memories about "particle physics")
+- **Lexical-Only Contradiction Detection** — `detect_contradictions()` now accepts an optional `llm_fn` parameter. Borderline lexical candidates are verified by the LLM for semantic contradiction, catching subtle conflicts that negation patterns alone would miss
+- **No Concurrent Access** — file I/O now uses cross-platform file locking (`msvcrt` on Windows, `fcntl` on Unix) with atomic writes (temp file + rename) to prevent corruption from concurrent access
 
 ## License
 
-PolyForm Noncommercial 1.0.0 — free for personal and non-commercial use.
-
----
-
-**v1.0.7** | [PyPI](https://pypi.org/project/vividnessmem/) | [SillyTavern Extension](VividMem-Embed/README.md) | [VividEmbed](https://github.com/Kronic90/VividEmbed)
+MIT
