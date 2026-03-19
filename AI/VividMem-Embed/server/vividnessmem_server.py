@@ -104,6 +104,34 @@ def _build_why_saved(message: str, emotion: str, is_user: bool, user_name: str =
         return f"Expressed: {text}{emo_part}"
 
 
+def _summarize_for_storage(message: str, max_len: int = 200) -> str:
+    """Condense a raw message into a storage-friendly snippet.
+
+    Memories should capture the *gist*, not parrot back the whole message.
+    Keeps up to ``max_len`` characters, breaking at sentence boundaries
+    when possible so the stored content reads naturally.
+    """
+    text = message.strip()
+    if len(text) <= max_len:
+        return text
+
+    # Try to break at sentence boundaries within the budget
+    best = max_len
+    for delim in (". ", "! ", "? "):
+        idx = text.rfind(delim, 0, max_len)
+        if idx > max_len // 3:              # don't cut too early
+            best = idx + 1                  # include the punctuation
+            break
+
+    if best == max_len:
+        # Fall back to a word boundary
+        sp = text.rfind(" ", 0, max_len)
+        if sp > max_len // 3:
+            best = sp
+
+    return text[:best].rstrip() + "…"
+
+
 def _truncate_to_budget(block: str, max_tokens: int) -> str:
     """Truncate a context block to fit within a token budget (~4 chars/token).
 
@@ -385,13 +413,14 @@ def process_message(req: ProcessMessageReq):
     mem = _get_mem(req.character)
 
     reason = _build_why_saved(req.message, req.emotion, req.is_user, req.user_name)
+    snippet = _summarize_for_storage(req.message)
 
     # Store the message as a memory
     if req.is_user:
         # User's message → social impression about the user
         mem.add_social_impression(
             entity=req.user_name,
-            content=req.message,
+            content=snippet,
             emotion=req.emotion,
             importance=req.importance,
             why_saved=reason,
@@ -399,7 +428,7 @@ def process_message(req: ProcessMessageReq):
     else:
         # Character's own message → self-reflection
         mem.add_self_reflection(
-            content=req.message,
+            content=snippet,
             emotion=req.emotion,
             importance=req.importance,
             source="dialogue",
