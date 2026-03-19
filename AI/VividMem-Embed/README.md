@@ -96,10 +96,14 @@ Copy-Item -Recurse st-extension\* "C:\path\to\SillyTavern\public\scripts\extensi
 | **Inject memory context** | On | Add memory block to system prompt |
 | **Auto-detect emotions** | On | Infer emotion from message keywords |
 | **Show mood badge** | On | Display character mood in chat header |
+| **Filter OOC messages** | On | Skip (( )), /ooc, // from being stored |
 | **Bump session on new chat** | On | Start new memory session when switching chats |
 | **Default importance** | 5 | Base importance score (1-10) |
 | **Min message length** | 10 | Skip very short messages |
 | **Context position** | Before | Where to inject memories in prompt |
+| **Max context tokens** | 0 | Limit injected tokens (0 = unlimited) |
+| **Memory scope** | Global | Global (shared) or Per-chat (isolated) |
+| **Injection mode** | Auto | Auto (extension system) or Macro only (`{{vividmem}}`) |
 
 ---
 
@@ -144,6 +148,93 @@ The server exposes these REST endpoints:
 |--------|----------|-------------|
 | POST | `/api/memory/consolidate/{character}` | Find memory clusters for consolidation |
 | POST | `/api/memory/dream/{character}` | Find dream candidates |
+| GET | `/api/memory/export/{character}` | Export all memories as JSON |
+| POST | `/api/memory/delete` | Delete a specific memory by content |
+| DELETE | `/api/memory/{character}?confirm=yes` | Wipe all memories for a character |
+| POST | `/api/memory/import/reindex` | Import old-format memories with auto re-indexing |
+
+---
+
+## Macros for Prompt Templates
+
+Place these anywhere in your SillyTavern prompt template:
+
+| Macro | Output |
+|-------|--------|
+| `{{vividmem}}` | Full memory context block (mood, briefs, memories, arcs) |
+| `{{vividmood}}` | Current mood label (e.g. "content", "anxious", "nostalgic") |
+
+**Injection mode:**
+- **Auto** (default) — memories are injected via SillyTavern's extension prompt system. No macro needed.
+- **Macro only** — set injection mode to "Macro only" in settings, then place `{{vividmem}}` exactly where you want the memory block in your prompt. This gives full control over placement and avoids duplicate injection.
+
+Example prompt template:
+```
+You are {{char}}.
+Current mood: {{vividmood}}
+
+{{vividmem}}
+
+Continue the conversation with {{user}}.
+```
+
+> **Note:** Macros require SillyTavern 1.12+. Older versions will use auto-injection only.
+
+---
+
+## Power-User Features
+
+### Memory Management
+- **Browse memories** — view all stored memories with emotion, importance, vividness, and source
+- **Delete individual memories** — trash button on each memory card in the browser
+- **Add manual notes** — type custom memory entries from the settings panel
+- **Wipe all memories** — nuclear option with double-confirmation (must type character name)
+
+### Import / Export
+- **Import old memories** — load JSON files from other memory systems (supports arrays, ChromaDB format, key-value, JSONL, character-keyed structures). Auto-detects emotion and importance.
+- **Export memories** — download a full JSON backup of all memories for a character
+
+### Advanced
+- **Consolidate Memories** — merge similar memories into coherent summaries
+- **Dream Cycle** — discover hidden connections between memories (runs between sessions)
+- **Context Preview** — popup showing exactly what gets injected, with token + character count
+- **Token budget** — cap how many tokens of memory context are injected (0 = unlimited)
+- **Per-chat vs Global** memory scope toggle
+
+### OOC Filter
+Out-of-character messages are automatically filtered from memory storage:
+- `(( double parentheses ))` — common RP OOC markers
+- `// slash comments`
+- `OOC:` or `/ooc` prefixes
+- `[OOC]` tagged messages
+
+---
+
+## NeuroChemistry
+
+VividnessMem includes a simulated neurochemical system that modulates memory encoding and retrieval in real time. Five neurotransmitters respond to conversation events:
+
+| Chemical | Responds To | Effect on Memory |
+|----------|-------------|------------------|
+| **Dopamine** | Rewards, novelty, achievement | Stronger encoding — memories stored more vividly |
+| **Cortisol** | Stress, conflict, threats | Narrowed attention + flashbulb encoding at extremes |
+| **Serotonin** | Mood stability, resolution | Low serotonin → moods linger longer, bias retrieval |
+| **Oxytocin** | Bonding, warmth, trust | Social impressions weighted more heavily |
+| **Norepinephrine** | Alertness, surprise | Low NE (at rest) → better memory consolidation |
+
+Chemistry is updated automatically during conversation and drifts back to baseline via homeostatic decay. Between sessions, a sleep reset restores chemical balance.
+
+---
+
+## Improved Performance with VividEmbed
+
+For embedding-based retrieval that's aware of emotional salience and vividness, pair this extension with **[VividEmbed](https://github.com/Kronic90/VividEmbed)**:
+
+```bash
+pip install vividembed
+```
+
+VividEmbed provides a fine-tuned embedding model and hybrid vector retrieval that outperforms standard RAG approaches on memory benchmarks.
 
 ---
 
@@ -218,3 +309,5 @@ VividMem-Embed/
 MIT — same as VividnessMem core.
 
 **Author**: Kronic90 — [GitHub](https://github.com/Kronic90/VividnessMem-Ai-Roommates)
+
+**Version**: 1.0.7

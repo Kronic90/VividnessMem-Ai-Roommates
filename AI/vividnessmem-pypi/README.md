@@ -61,7 +61,69 @@ context = mem.get_context_block(current_entity="Alex", conversation_context="ast
 mem.save()
 ```
 
-## What's New in v1.0.5
+## What's New in v1.0.7
+
+### NeuroChemistry System
+A simulated neurochemical layer that modulates memory encoding, retrieval, and mood in real time — inspired by how dopamine, cortisol, serotonin, oxytocin, and norepinephrine actually regulate human cognition:
+
+```python
+mem = VividnessMem("./my_agent_memory")
+mem.chemistry.enabled = True  # Activate neurochemistry
+
+# Chemistry reacts to conversation events
+mem.chemistry.on_event("warmth", intensity=0.8)      # Oxytocin rises → social memory boost
+mem.chemistry.on_event("surprise_positive")           # Dopamine spike → encoding boost
+mem.chemistry.on_event("conflict", intensity=0.6)     # Cortisol + NE rise → flashbulb encoding
+
+# Also reacts to detected emotions
+mem.chemistry.on_emotion("excited", intensity=0.9)
+
+# Between sessions, chemistry resets (simulates sleep)
+mem.chemistry.sleep_reset(hours=8.0)
+
+# Inspect current neurochemical state
+print(mem.chemistry.describe())
+# → dopamine: 0.65 ▲ | cortisol: 0.28 ~ | serotonin: 0.58 ~ | oxytocin: 0.55 ▲ | norepinephrine: 0.48 ~
+```
+
+**5 neurotransmitters → 9 cognitive modifiers:**
+
+| Chemical | Modulates | Effect |
+|----------|-----------|--------|
+| **Dopamine** | Encoding boost | High DA → memories stored more strongly (+30% max) |
+| **Cortisol** | Attention width, flashbulb | Moderate → focused recall, extreme → flashbulb encoding |
+| **Serotonin** | Mood stability | Low serotonin → moods linger longer, bias retrieval more |
+| **Oxytocin** | Social memory boost | High OT → social impressions weighted more heavily |
+| **Norepinephrine** | Consolidation bonus | Low NE (rest) → better memory consolidation |
+
+**10 event profiles:** `surprise_positive`, `surprise_negative`, `conflict`, `warmth`, `novelty`, `resolution`, `achievement`, `loss`, `humor`, `stress`
+
+Each event pushes chemicals realistically — conflict raises cortisol + norepinephrine while dropping serotonin + oxytocin. Chemicals drift back to baseline via homeostatic decay at biologically-inspired rates (norepinephrine is fast/phasic, cortisol is slow/lingering). The Yerkes-Dodson inverted-U is implemented for cortisol — moderate stress sharpens attention, extreme stress impairs it.
+
+### SillyTavern Extension (v1.0.7)
+Full-featured SillyTavern integration with a REST API server:
+- **`{{vividmem}}` macro** — place memory context anywhere in your prompt template
+- **`{{vividmood}}` macro** — insert current mood label
+- **Token budget** — cap how many tokens of memory get injected
+- **Per-chat / cross-chat memory toggle**
+- **OOC message filter** — skips `(( ))`, `/ooc`, `//` from being stored
+- **Import old memory JSON files** with automatic re-indexing
+- **Export / backup** memories as JSON
+- **Delete individual memories** from the browse panel
+- **Manual memory notes** — type custom memories directly
+- **Consolidate / Dream** triggers from the UI
+- **Wipe all memories** with double-confirmation safety
+
+See the [SillyTavern extension](https://github.com/Kronic90/VividnessMem-Ai-Roommates/tree/main/VividMem-Embed) for setup instructions.
+
+### Improved Performance with VividEmbed
+For embedding-based retrieval that outperforms standard RAG, pair VividnessMem with **[VividEmbed](https://github.com/Kronic90/VividEmbed)** — a fine-tuned emotion-vividness-aware embedding model:
+
+```bash
+pip install vividembed
+```
+
+VividEmbed provides hybrid vector retrieval that's aware of emotional salience and vividness scores, giving better recall on benchmarks than vanilla embedding approaches.
 
 ### Professional Mode
 Toggle between **Character mode** (default — personality-rich, emotionally expressive) and **Professional mode** (neutral tone, fact-focused, no persona quirks):
@@ -224,6 +286,14 @@ Mood alignment provides an additional boost/penalty based on emotional congruenc
 - **Context block integration** — active tasks and relevant solutions injected automatically
 - **Adaptive auto-tracking** — professional mode auto-records task transitions
 
+### NeuroChemistry *(new in v1.0.7)*
+- **5 neurotransmitters** — dopamine, cortisol, serotonin, oxytocin, norepinephrine
+- **9 cognitive modifiers** — encoding boost, attention width, flashbulb, mood stability, social boost, warmth nudge, consolidation bonus, Yerkes-Dodson
+- **10 event profiles** — surprise, conflict, warmth, novelty, resolution, achievement, loss, humor, stress
+- **Emotion-to-chemistry mapping** — PAD vectors drive chemical shifts automatically
+- **Homeostatic drift** — chemicals return to baseline at biologically-inspired rates
+- **Sleep reset** — simulated overnight restoration between sessions
+
 ## API Reference
 
 ### Core
@@ -286,6 +356,19 @@ mem.detect_contradictions(llm_fn=None)               # Lexical + optional LLM ve
 mem.find_consolidation_clusters(min_cluster=3)       # Related memory groups
 mem.find_dream_candidates()                          # Between-session patterns
 mem.get_relationship_arc(entity)                     # Warmth trajectory
+```
+
+### NeuroChemistry *(v1.0.7)*
+
+```python
+mem.chemistry.enabled = True                         # Activate neurochemistry
+mem.chemistry.on_event("warmth", intensity=0.8)      # Push chemicals from event
+mem.chemistry.on_emotion("excited", intensity=0.9)   # Push from emotion label
+mem.chemistry.tick()                                 # Homeostatic drift (auto-called)
+mem.chemistry.sleep_reset(hours=8.0)                 # Between-session reset
+mem.chemistry.levels                                 # Current chemical levels dict
+mem.chemistry.describe()                             # Human-readable summary
+mem.chemistry.get_modifiers()                        # 9 cognitive modifier values
 ```
 
 ## Requirements

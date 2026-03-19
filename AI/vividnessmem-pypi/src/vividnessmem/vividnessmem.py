@@ -374,6 +374,380 @@ AUTO_TRACK_QUALITY_INIT     = 0.5   # starting agent_track_quality score
 AUTO_TRACK_EMA_ALPHA        = 0.1   # smoothing factor for quality updates
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+#  NeuroChemistry — neurochemical modulation layer
+# ═══════════════════════════════════════════════════════════════════════════
+#
+#  Models 5 neurotransmitters as continuously-varying signals that modulate
+#  existing VividnessMem parameters.  Every chemical drifts back to its
+#  homeostatic baseline between events (self-correcting).
+#
+#  Each chemical level lives in [0.0, 1.0] and affects existing systems
+#  by returning a dict of modifier floats from get_modifiers().
+#
+#  Neuroscience references:
+#    Dopamine  — Schultz (1997), reward prediction error
+#    Cortisol  — Yerkes-Dodson inverted-U curve
+#    Serotonin — mood stability / negative bias regulation
+#    Oxytocin  — Kosfeld et al. (2005), social bonding
+#    Norepinephrine — locus coeruleus, phasic attention/arousal
+#
+#  This layer is entirely opt-in: chemistry_enabled=False (the default)
+#  means get_modifiers() returns all-neutral values and tick/on_event
+#  are no-ops.
+
+class NeuroChemistry:
+    """Simulated neurochemical state that modulates memory parameters.
+
+    All chemical levels are floats in [0.0, 1.0].  Each drifts toward
+    its baseline at a chemical-specific rate.  Conversation events
+    (surprise, conflict, warmth, novelty, resolution) push levels up
+    or down.  get_modifiers() translates levels into multipliers that
+    existing VividnessMem methods consume.
+    """
+
+    __slots__ = ("enabled", "_levels", "_baselines", "_decay_rates",
+                 "_last_tick")
+
+    # ── Defaults ──────────────────────────────────────────────────────
+    CHEMICALS = ("dopamine", "cortisol", "serotonin", "oxytocin",
+                 "norepinephrine")
+
+    DEFAULT_BASELINES: dict[str, float] = {
+        "dopamine":       0.50,
+        "cortisol":       0.30,
+        "serotonin":      0.60,
+        "oxytocin":       0.40,
+        "norepinephrine": 0.50,
+    }
+
+    # Per-minute drift rate toward baseline (0.02 = ~50 min to half-close the gap)
+    DEFAULT_DECAY_RATES: dict[str, float] = {
+        "dopamine":       0.035,   # fast — reward signals are phasic
+        "cortisol":       0.015,   # slow — stress lingers
+        "serotonin":      0.010,   # very slow — mood regulation is tonic
+        "oxytocin":       0.020,   # moderate — bonding fades gradually
+        "norepinephrine": 0.040,   # fastest — attention is momentary
+    }
+
+    # Maximum single-event push (prevents runaway spikes)
+    MAX_PUSH = 0.35
+
+    def __init__(self, enabled: bool = False):
+        self.enabled = enabled
+        self._baselines = dict(self.DEFAULT_BASELINES)
+        self._decay_rates = dict(self.DEFAULT_DECAY_RATES)
+        self._levels = dict(self._baselines)  # start at homeostasis
+        self._last_tick: str = datetime.now().isoformat()
+
+    # ── Homeostatic drift ─────────────────────────────────────────────
+
+    def tick(self, dt_minutes: float | None = None):
+        """Drift every chemical toward its baseline.
+
+        If dt_minutes is None, calculates real elapsed time since last tick.
+        Called once per conversation turn from VividnessMem.
+        """
+        if not self.enabled:
+            return
+        if dt_minutes is None:
+            now = datetime.now()
+            last = datetime.fromisoformat(self._last_tick)
+            dt_minutes = max((now - last).total_seconds() / 60.0, 0.0)
+            self._last_tick = now.isoformat()
+        else:
+            self._last_tick = datetime.now().isoformat()
+
+        for ch in self.CHEMICALS:
+            distance = self._baselines[ch] - self._levels[ch]
+            # Exponential approach: level += distance * rate * dt
+            shift = distance * self._decay_rates[ch] * dt_minutes
+            self._levels[ch] = self._clamp(self._levels[ch] + shift)
+
+    # ── Event-driven pushes ───────────────────────────────────────────
+
+    # Pre-defined event profiles: each maps chemical → push magnitude.
+    # Positive = increase, negative = decrease.  Intensities are scaled
+    # by the event's intensity argument (0.0 – 1.0).
+    EVENT_PROFILES: dict[str, dict[str, float]] = {
+        "surprise_positive": {          # unexpected good outcome
+            "dopamine": +0.30,
+            "norepinephrine": +0.15,
+        },
+        "surprise_negative": {          # unexpected bad outcome
+            "cortisol": +0.20,
+            "norepinephrine": +0.20,
+            "dopamine": -0.15,
+        },
+        "conflict": {                   # argument, threat, hostility
+            "cortisol": +0.30,
+            "norepinephrine": +0.25,
+            "serotonin": -0.10,
+            "oxytocin": -0.10,
+        },
+        "warmth": {                     # affection, bonding, trust
+            "oxytocin": +0.25,
+            "serotonin": +0.10,
+            "dopamine": +0.10,
+            "cortisol": -0.10,
+        },
+        "novelty": {                    # new topic, curiosity
+            "dopamine": +0.20,
+            "norepinephrine": +0.15,
+        },
+        "resolution": {                 # conflict resolved, calm restored
+            "serotonin": +0.20,
+            "cortisol": -0.20,
+            "norepinephrine": -0.10,
+        },
+        "achievement": {                # task completed, goal reached
+            "dopamine": +0.30,
+            "serotonin": +0.10,
+        },
+        "loss": {                       # disappointment, failure
+            "dopamine": -0.25,
+            "cortisol": +0.15,
+            "serotonin": -0.15,
+        },
+        "humor": {                      # laughter, amusement
+            "dopamine": +0.15,
+            "serotonin": +0.10,
+            "cortisol": -0.05,
+        },
+        "stress": {                     # sustained pressure
+            "cortisol": +0.25,
+            "norepinephrine": +0.20,
+            "serotonin": -0.10,
+        },
+    }
+
+    def on_event(self, event_type: str, intensity: float = 0.7):
+        """Push chemical levels based on a conversation event.
+
+        Parameters
+        ----------
+        event_type : str
+            One of the EVENT_PROFILES keys (e.g. 'conflict', 'warmth').
+        intensity : float
+            Scale factor 0.0–1.0 for the push magnitudes.
+        """
+        if not self.enabled:
+            return
+        profile = self.EVENT_PROFILES.get(event_type, {})
+        intensity = max(0.0, min(1.0, intensity))
+        for ch, mag in profile.items():
+            push = mag * intensity
+            push = max(-self.MAX_PUSH, min(self.MAX_PUSH, push))
+            self._levels[ch] = self._clamp(self._levels[ch] + push)
+
+    def on_emotion(self, emotion: str, intensity: float = 0.7):
+        """Infer chemical shifts from an emotion label.
+
+        Maps the emotion's PAD vector to appropriate chemical pushes:
+          - High pleasure → dopamine up, cortisol down
+          - High arousal  → norepinephrine up
+          - Low pleasure  → cortisol up, serotonin down
+          - High dominance → dopamine up
+          - Social-positive emotions → oxytocin up
+        """
+        if not self.enabled:
+            return
+        vec = _emotion_to_vector(emotion)
+        if not vec:
+            return
+        p, a, d = vec
+        intensity = max(0.0, min(1.0, intensity))
+
+        # Pleasure axis → dopamine / cortisol
+        if p > 0.2:
+            self._push("dopamine", p * 0.15 * intensity)
+            self._push("cortisol", -p * 0.08 * intensity)
+        elif p < -0.2:
+            self._push("cortisol", abs(p) * 0.12 * intensity)
+            self._push("serotonin", p * 0.08 * intensity)  # negative push
+            self._push("dopamine", p * 0.10 * intensity)   # negative push
+
+        # Arousal axis → norepinephrine
+        if abs(a) > 0.3:
+            self._push("norepinephrine", a * 0.12 * intensity)
+
+        # Dominance axis → dopamine (feeling in control)
+        if d > 0.3:
+            self._push("dopamine", d * 0.08 * intensity)
+
+        # Social-positive emotions → oxytocin
+        social_positive = {"affectionate", "grateful", "appreciative", "warm",
+                           "tender", "loving", "trusting", "connected"}
+        if emotion.lower().strip() in social_positive or p > 0.5:
+            self._push("oxytocin", 0.10 * intensity)
+
+    def _push(self, chemical: str, amount: float):
+        """Apply a bounded push to a single chemical."""
+        amount = max(-self.MAX_PUSH, min(self.MAX_PUSH, amount))
+        self._levels[chemical] = self._clamp(self._levels[chemical] + amount)
+
+    # ── Modifier output ───────────────────────────────────────────────
+
+    def get_modifiers(self) -> dict[str, float]:
+        """Translate current chemical levels into parameter modifiers.
+
+        Returns a dict of named multipliers that VividnessMem methods
+        use in place of hardcoded constants.  When chemistry is disabled,
+        all modifiers are neutral (1.0 or 0.0 as appropriate).
+        """
+        if not self.enabled:
+            return {
+                "encoding_boost":       1.0,
+                "attention_width":      1.0,
+                "mood_decay_mult":      1.0,
+                "mood_influence_mult":  1.0,
+                "social_boost":         1.0,
+                "warmth_nudge_mult":    1.0,
+                "consolidation_bonus":  1.0,
+                "flashbulb":            False,
+                "yerkes_dodson":        1.0,
+            }
+
+        da = self._levels["dopamine"]
+        co = self._levels["cortisol"]
+        se = self._levels["serotonin"]
+        ox = self._levels["oxytocin"]
+        ne = self._levels["norepinephrine"]
+
+        # ── Dopamine → encoding strength ──────────────────────────
+        # High dopamine → memories encoded more strongly (+30% max)
+        encoding_boost = 1.0 + (da - self._baselines["dopamine"]) * 0.6
+
+        # ── Cortisol → Yerkes-Dodson inverted U ───────────────────
+        # Moderate cortisol sharpens attention; extreme impairs it.
+        #   peak at ~0.45, drops at extremes
+        yd = 1.0 - 3.5 * (co - 0.45) ** 2
+        yerkes_dodson = max(0.6, min(1.15, yd))
+
+        # ── Cortisol → attention width ────────────────────────────
+        # High cortisol narrows focus (fewer but more targeted memories)
+        attention_width = 1.0 - (co - self._baselines["cortisol"]) * 0.5
+        attention_width = max(0.6, min(1.2, attention_width))
+
+        # ── Cortisol → flashbulb encoding ─────────────────────────
+        flashbulb = co > 0.70
+
+        # ── Serotonin → mood stability ────────────────────────────
+        # Low serotonin: moods decay slower (stuck in moods), influence retrieval more
+        se_delta = se - self._baselines["serotonin"]
+        mood_decay_mult = 1.0 + se_delta * 1.5       # range ~0.55 – 1.45
+        mood_decay_mult = max(0.4, min(1.6, mood_decay_mult))
+        mood_influence_mult = 1.0 - se_delta * 0.8   # inverse: low serotonin → more influence
+        mood_influence_mult = max(0.5, min(1.5, mood_influence_mult))
+
+        # ── Oxytocin → social memory boost ────────────────────────
+        social_boost = 1.0 + (ox - self._baselines["oxytocin"]) * 0.8
+        social_boost = max(0.7, min(1.4, social_boost))
+
+        # ── Oxytocin → warmth nudge multiplier ────────────────────
+        warmth_nudge_mult = 1.0 + (ox - self._baselines["oxytocin"]) * 1.0
+        warmth_nudge_mult = max(0.5, min(1.6, warmth_nudge_mult))
+
+        # ── Norepinephrine → consolidation strength ───────────────
+        # Low NE = better consolidation (rest mode); high NE = encoding mode
+        consolidation_bonus = 1.0 + (self._baselines["norepinephrine"] - ne) * 0.6
+        consolidation_bonus = max(0.7, min(1.4, consolidation_bonus))
+
+        return {
+            "encoding_boost":       round(encoding_boost, 4),
+            "attention_width":      round(attention_width, 4),
+            "mood_decay_mult":      round(mood_decay_mult, 4),
+            "mood_influence_mult":  round(mood_influence_mult, 4),
+            "social_boost":         round(social_boost, 4),
+            "warmth_nudge_mult":    round(warmth_nudge_mult, 4),
+            "consolidation_bonus":  round(consolidation_bonus, 4),
+            "flashbulb":            flashbulb,
+            "yerkes_dodson":        round(yerkes_dodson, 4),
+        }
+
+    # ── Session reset (simulate sleep) ────────────────────────────────
+
+    def sleep_reset(self, hours: float = 8.0):
+        """Simulate sleep: drift chemicals strongly toward baseline.
+
+        Called between sessions.  hours controls how far toward baseline
+        we drift (8 hours ≈ near-full reset, shorter nap = partial).
+        """
+        if not self.enabled:
+            return
+        # Equivalent to ticking many minutes: use a large dt
+        equivalent_minutes = hours * 60
+        for ch in self.CHEMICALS:
+            distance = self._baselines[ch] - self._levels[ch]
+            # Stronger drift than normal tick (sleep is restorative)
+            shift = distance * min(self._decay_rates[ch] * equivalent_minutes * 2.0, 1.0)
+            self._levels[ch] = self._clamp(self._levels[ch] + shift)
+        self._last_tick = datetime.now().isoformat()
+
+    # ── State access ──────────────────────────────────────────────────
+
+    @property
+    def levels(self) -> dict[str, float]:
+        """Current chemical levels (read-only copy)."""
+        return dict(self._levels)
+
+    @property
+    def baselines(self) -> dict[str, float]:
+        return dict(self._baselines)
+
+    def describe(self) -> str:
+        """Human-readable summary of current neurochemical state."""
+        if not self.enabled:
+            return "(neurochemistry disabled)"
+        parts = []
+        for ch in self.CHEMICALS:
+            lvl = self._levels[ch]
+            base = self._baselines[ch]
+            delta = lvl - base
+            arrow = "▲" if delta > 0.05 else ("▼" if delta < -0.05 else "~")
+            parts.append(f"{ch}: {lvl:.2f} {arrow}")
+        return " | ".join(parts)
+
+    # ── Serialization ─────────────────────────────────────────────────
+
+    def to_dict(self) -> dict:
+        return {
+            "enabled": self.enabled,
+            "levels": {k: round(v, 4) for k, v in self._levels.items()},
+            "baselines": dict(self._baselines),
+            "decay_rates": dict(self._decay_rates),
+            "last_tick": self._last_tick,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "NeuroChemistry":
+        obj = cls(enabled=d.get("enabled", False))
+        if "levels" in d and isinstance(d["levels"], dict):
+            for ch in cls.CHEMICALS:
+                if ch in d["levels"]:
+                    obj._levels[ch] = cls._clamp_static(float(d["levels"][ch]))
+        if "baselines" in d and isinstance(d["baselines"], dict):
+            for ch in cls.CHEMICALS:
+                if ch in d["baselines"]:
+                    obj._baselines[ch] = cls._clamp_static(float(d["baselines"][ch]))
+        if "decay_rates" in d and isinstance(d["decay_rates"], dict):
+            for ch in cls.CHEMICALS:
+                if ch in d["decay_rates"]:
+                    obj._decay_rates[ch] = float(d["decay_rates"][ch])
+        obj._last_tick = d.get("last_tick", datetime.now().isoformat())
+        return obj
+
+    # ── Utilities ─────────────────────────────────────────────────────
+
+    @staticmethod
+    def _clamp(v: float) -> float:
+        return max(0.0, min(1.0, v))
+
+    @staticmethod
+    def _clamp_static(v: float) -> float:
+        return max(0.0, min(1.0, v))
+
+
 def _emotion_to_vector(emotion: str) -> tuple[float, float, float] | None:
     """Map an emotion label to its PAD vector, or None if unknown."""
     if not emotion:
@@ -894,6 +1268,13 @@ class VividnessMem:
         neutral, task-oriented headers.  All other features (spaced-repetition
         decay, resonance, STM facts, dreaming, consolidation, deduplication,
         preferences) work identically.
+    chemistry : bool, default False
+        When True, enables the neurochemical modulation layer.
+        Five simulated neurotransmitters (dopamine, cortisol, serotonin,
+        oxytocin, norepinephrine) dynamically adjust encoding strength,
+        attention width, mood stability, social bonding, and consolidation.
+        Chemical levels drift back to homeostatic baselines between events.
+        Disabled by default so existing behaviour is unchanged.
     """
 
     # Tuning knobs — override on the class or instance as needed
@@ -904,7 +1285,8 @@ class VividnessMem:
 
     def __init__(self, data_dir: str | Path = "memory_data",
                  encryption_key: str | None = None,
-                 professional: bool = False):
+                 professional: bool = False,
+                 chemistry: bool = False):
         self.professional = professional
         self.data_dir   = Path(data_dir)
         self.social_dir = self.data_dir / "social"
@@ -964,10 +1346,14 @@ class VividnessMem:
         self._project_artifacts: list[ArtifactRecord] = []
         self._project_meta: dict = {}           # {last_accessed, created, access_count, agent_track_quality}
 
+        # ── Neurochemical modulation layer ─────────────────────────────
+        self.chemistry = NeuroChemistry(enabled=chemistry)
+
         self._ensure_dirs()
         self._load()
         self._load_brief()
         self._load_solutions()
+        self._load_chemistry()
         self._rebuild_index()
 
     # ── Encryption helpers ─────────────────────────────────────────────
@@ -1146,7 +1532,22 @@ class VividnessMem:
 
         If a near-duplicate exists, the new version replaces it (keeping
         the higher importance and merging access history).
+
+        Neurochemistry: dopamine modulates encoding strength (importance boost),
+        cortisol above threshold triggers flashbulb encoding (high stability),
+        and the emotion drives chemical level shifts.
         """
+        # Neurochemical encoding modulation
+        mods = self.chemistry.get_modifiers()
+        effective_importance = importance
+        if mods["encoding_boost"] != 1.0:
+            effective_importance = max(1, min(10, round(
+                importance * mods["encoding_boost"])))
+        flashbulb = mods["flashbulb"]
+
+        # Feed emotion into chemistry
+        self.chemistry.on_emotion(emotion)
+
         new_words = _content_words(content)
         for i, existing in enumerate(self.self_reflections):
             if _overlap_ratio(new_words, existing.content_words) >= _DEDUP_THRESHOLD:
@@ -1154,7 +1555,7 @@ class VividnessMem:
                 merged = Memory(
                     content=content,
                     emotion=emotion,
-                    importance=max(importance, existing.importance),
+                    importance=max(effective_importance, existing.importance),
                     source=source,
                     why_saved=why_saved or existing.why_saved,
                 )
@@ -1162,13 +1563,17 @@ class VividnessMem:
                 merged._stability    = existing._stability
                 merged._last_access  = existing._last_access
                 merged.timestamp     = existing.timestamp  # keep original creation time
+                if flashbulb:
+                    merged._stability = max(merged._stability, STABILITY_CAP * 0.6)
                 self.self_reflections[i] = merged
                 self._rebuild_index()
                 return merged
 
         mem = Memory(content=content, emotion=emotion,
-                     importance=importance, source=source,
+                     importance=effective_importance, source=source,
                      why_saved=why_saved)
+        if flashbulb:
+            mem._stability = max(mem._stability, STABILITY_CAP * 0.6)
         self.self_reflections.append(mem)
         self._index_memory(len(self.self_reflections) - 1, mem)
         return mem
@@ -1177,7 +1582,23 @@ class VividnessMem:
                               emotion: str = "neutral",
                               importance: int = 5,
                               why_saved: str = "") -> Memory:
-        """Store a social impression of an entity. Deduplicates per entity."""
+        """Store a social impression of an entity. Deduplicates per entity.
+
+        Neurochemistry: oxytocin boosts social memory encoding strength,
+        dopamine modulates importance, and the emotion drives chemical shifts.
+        """
+        # Neurochemical modulation for social encoding
+        mods = self.chemistry.get_modifiers()
+        effective_importance = importance
+        if mods["encoding_boost"] != 1.0 or mods["social_boost"] != 1.0:
+            combined_boost = mods["encoding_boost"] * mods["social_boost"]
+            effective_importance = max(1, min(10, round(
+                importance * combined_boost)))
+        flashbulb = mods["flashbulb"]
+
+        # Feed emotion into chemistry
+        self.chemistry.on_emotion(emotion)
+
         if entity not in self.social_impressions:
             self.social_impressions[entity] = []
         impressions = self.social_impressions[entity]
@@ -1188,7 +1609,7 @@ class VividnessMem:
                 merged = Memory(
                     content=content,
                     emotion=emotion,
-                    importance=max(importance, existing.importance),
+                    importance=max(effective_importance, existing.importance),
                     entity=entity,
                     why_saved=why_saved or existing.why_saved,
                 )
@@ -1196,13 +1617,17 @@ class VividnessMem:
                 merged._stability    = existing._stability
                 merged._last_access  = existing._last_access
                 merged.timestamp     = existing.timestamp
+                if flashbulb:
+                    merged._stability = max(merged._stability, STABILITY_CAP * 0.6)
                 impressions[i] = merged
                 self._update_relationship_arc(entity, emotion)
                 return merged
 
         mem = Memory(content=content, emotion=emotion,
-                     importance=importance, source="social",
+                     importance=effective_importance, source="social",
                      entity=entity, why_saved=why_saved)
+        if flashbulb:
+            mem._stability = max(mem._stability, STABILITY_CAP * 0.6)
         impressions.append(mem)
         self._update_relationship_arc(entity, emotion)
         return mem
@@ -1219,7 +1644,18 @@ class VividnessMem:
 
         Touch dampener: memories only get reinforced (touch) if they share
         at least one context word with the current conversation.
+
+        Neurochemistry: cortisol modulates attention width (how many
+        memories surface) via Yerkes-Dodson curve.  Tick is called to
+        drift chemical levels toward baseline.
         """
+        # Tick neurochemistry (drift toward homeostasis)
+        self.chemistry.tick()
+
+        # Cortisol modulates how many memories surface
+        mods = self.chemistry.get_modifiers()
+        effective_limit = max(3, round(self.ACTIVE_SELF_LIMIT * mods["attention_width"]))
+
         if context:
             ctx_words = _resonance_words(context)
             ctx_words_expanded = _expand_synonyms(ctx_words)
@@ -1245,7 +1681,7 @@ class VividnessMem:
                 reverse=True,
             )
 
-        active = ranked[:self.ACTIVE_SELF_LIMIT]
+        active = ranked[:effective_limit]
 
         # Touch dampener — only reinforce memories relevant to context
         if context:
@@ -1303,7 +1739,14 @@ class VividnessMem:
         return foreground, background
 
     def get_active_social(self, entity: str) -> list[Memory]:
-        """Return the most vivid social impressions for a given entity."""
+        """Return the most vivid social impressions for a given entity.
+
+        Neurochemistry: oxytocin boosts the social memory retrieval limit.
+        """
+        mods = self.chemistry.get_modifiers()
+        effective_social_limit = max(2, round(
+            self.ACTIVE_SOCIAL_LIMIT * mods["social_boost"]))
+
         impressions = self.social_impressions.get(entity, [])
         ranked = sorted(
             impressions,
@@ -1311,7 +1754,7 @@ class VividnessMem:
                            else r.mood_adjusted_vividness(self._mood)),
             reverse=True,
         )
-        return ranked[:self.ACTIVE_SOCIAL_LIMIT]
+        return ranked[:effective_social_limit]
 
     # ── Mood system ───────────────────────────────────────────────────
 
@@ -1338,6 +1781,9 @@ class VividnessMem:
 
         Uses exponential moving average so mood drifts gradually.
         No-op in professional mode (mood stays neutral).
+
+        Neurochemistry: serotonin modulates how fast mood shifts
+        (low serotonin = mood changes more slowly, gets stuck).
         """
         if self.professional or not emotions:
             return
@@ -1346,7 +1792,10 @@ class VividnessMem:
         if not vectors:
             return
         avg = tuple(sum(v[i] for v in vectors) / len(vectors) for i in range(3))
-        alpha = 0.3  # blending factor
+        # Serotonin modulates mood blending speed
+        mods = self.chemistry.get_modifiers()
+        alpha = 0.3 * mods["mood_decay_mult"]  # low serotonin → smaller alpha → sticky moods
+        alpha = max(0.1, min(0.5, alpha))
         self._mood = tuple(
             round(self._mood[i] * (1 - alpha) + avg[i] * alpha, 4)
             for i in range(3)
@@ -1378,6 +1827,29 @@ class VividnessMem:
             self._mood = tuple(float(x) for x in raw)
         else:
             self._absorb_mood_from_memories()
+
+    # ── Neurochemistry persistence ────────────────────────────────────
+
+    def _save_chemistry(self):
+        """Persist neurochemical state to disk."""
+        if not self.chemistry.enabled:
+            return
+        chem_file = self.data_dir / "neurochemistry.json"
+        self._write_json(chem_file, self.chemistry.to_dict())
+
+    def _load_chemistry(self):
+        """Load neurochemical state from disk (if available)."""
+        chem_file = self.data_dir / "neurochemistry.json"
+        if chem_file.exists():
+            try:
+                data = self._read_json(chem_file)
+                if isinstance(data, dict):
+                    # Preserve enabled state from constructor (user controls this)
+                    was_enabled = self.chemistry.enabled
+                    self.chemistry = NeuroChemistry.from_dict(data)
+                    self.chemistry.enabled = was_enabled
+            except Exception:
+                pass  # keep defaults
 
     # ── Short-term memory (STM) ───────────────────────────────────────
 
@@ -2277,9 +2749,19 @@ class VividnessMem:
 
     def find_consolidation_clusters(self, min_cluster: int = 3,
                                      max_clusters: int = 3) -> list[list[Memory]]:
-        """Find groups of related memories that could be consolidated into gist memories."""
+        """Find groups of related memories that could be consolidated into gist memories.
+
+        Neurochemistry: norepinephrine gates consolidation — low NE (rest state)
+        yields a bonus that relaxes the overlap threshold, finding more clusters.
+        """
         if len(self.self_reflections) < min_cluster:
             return []
+
+        # NE modulation: lower NE → better consolidation (lower threshold)
+        mods = self.chemistry.get_modifiers()
+        consol_bonus = mods["consolidation_bonus"]
+        # Effective overlap threshold: 0.25 is base, bonus lowers it
+        effective_threshold = max(0.15, 0.25 / consol_bonus)
 
         n = len(self.self_reflections)
         word_sets = [_content_words(r.content) for r in self.self_reflections]
@@ -2288,7 +2770,7 @@ class VividnessMem:
         for i in range(n):
             for j in range(i + 1, n):
                 overlap = _overlap_ratio(word_sets[i], word_sets[j])
-                if 0.25 <= overlap < _DEDUP_THRESHOLD:
+                if effective_threshold <= overlap < _DEDUP_THRESHOLD:
                     adjacency[i].add(j)
                     adjacency[j].add(i)
 
@@ -2597,7 +3079,9 @@ class VividnessMem:
 
         # Warmth accumulates: current warmth + trajectory nudge
         old_warmth = arc["warmth"]
-        warmth_nudge = 0.1 * arc["trajectory"]
+        # Oxytocin modulates warmth nudge strength
+        mods = self.chemistry.get_modifiers()
+        warmth_nudge = 0.1 * arc["trajectory"] * mods["warmth_nudge_mult"]
         arc["warmth"] = round(max(-1.0, min(1.0, old_warmth + warmth_nudge)), 4)
 
         arc["impression_count"] = arc.get("impression_count", 0) + 1
@@ -2985,6 +3469,9 @@ class VividnessMem:
         if self._solutions:
             self._save_solutions()
 
+        # Persist neurochemical state
+        self._save_chemistry()
+
     def _load(self):
         if self.self_file.exists():
             try:
@@ -3064,9 +3551,16 @@ class VividnessMem:
         self._write_json(self.brief_file, self._brief_data)
 
     def bump_session(self) -> int:
-        """Increment session counter. Returns new count."""
+        """Increment session counter. Returns new count.
+
+        Neurochemistry: triggers a sleep_reset between sessions,
+        drifting chemicals back toward baseline (simulating rest).
+        """
         self._brief_data["session_count"] = self._brief_data.get("session_count", 0) + 1
+        # Between-session chemical reset (simulate sleep/rest)
+        self.chemistry.sleep_reset(hours=8.0)
         self._save_brief()
+        self._save_chemistry()
         return self._brief_data["session_count"]
 
     def needs_brief(self) -> bool:
